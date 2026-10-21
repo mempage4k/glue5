@@ -17,7 +17,7 @@ const OVERLAYS: [(&str, fn() -> bool, Patch); 8] = [
     ("common/data/control/southpaw.meta", always, radio_wheel_axes),
     ("common/data/control/trigger_swap.meta", always, radio_wheel_axes),
     ("common/data/control/southpaw_trigger_swap.meta", always, radio_wheel_axes),
-    ("x64/data/control/fixed.meta", always, radio_wheel_axes),
+    ("x64/data/control/fixed.meta", always, mouse_axes),
 ];
 
 /// The changed files' paths under `data/`.
@@ -145,6 +145,25 @@ fn radio_wheel_axes(text: String) -> Option<String> {
     dedent_to(out, text.len())
 }
 
+/// Scripted cameras (e.g. Paparazzo - The Sex Tape) read
+/// INPUT_SCALED_LOOK_LR/UD (290/291) for mouse movement. This data has no
+/// mappings for them, so the camera stays still despite normal mouse look
+/// working. CControl applies the vertical inversion preference to UD.
+/// Keep the radio wheel mappings and the manifest's file size too.
+fn mouse_axes(text: String) -> Option<String> {
+    let text = radio_wheel_axes(text)?;
+    let mut out = text.clone();
+    let at = out.find("</Mappings>")?;
+    let mut mappings = String::new();
+    for (input, axis) in [("SCALED_LOOK_LR", "X"), ("SCALED_LOOK_UD", "Y")] {
+        mappings.push_str(&format!(
+            "<Item><Input>INPUT_{input}</Input><Source>IOMS_MOUSE_SCALEDAXIS</Source><Parameters><Item>IOM_AXIS_{axis}</Item></Parameters></Item>\n"
+        ));
+    }
+    out.insert_str(at, &mappings);
+    dedent_to(out, text.len())
+}
+
 /// `text` cut to `len` bytes from its lines' indentation, the last lines
 /// first; `None` if it has not that much.
 fn dedent_to(text: String, len: usize) -> Option<String> {
@@ -190,4 +209,31 @@ fn radio_wheel_mapped_as_weapon_wheel() {
     assert!(out.starts_with(&format!("<a>\r\n\t<Mappings>\r\n{lr}{radio_lr}{ud}{radio_ud}")));
     // Without room for the copies, the file stays as it is.
     assert_eq!(radio_wheel_axes(format!("<a>{}{}</a>", flat(&lr), flat(&ud))), None);
+}
+
+#[test]
+fn scripted_cameras_have_both_scaled_mouse_axes() {
+    let item = |input: &str, axis: &str| {
+        format!(
+            "<Item><Input>INPUT_{input}</Input><Source>IOMS_MOUSE_NORMALIZED</Source><Parameters><Item>IOM_AXIS_{axis}</Item></Parameters></Item>\n"
+        )
+    };
+    let lr = item("WEAPON_WHEEL_LR", "X");
+    let ud = item("WEAPON_WHEEL_UD", "Y");
+    let padding = "\t\t\t\t<!-- padding -->\n".repeat(200);
+    let text = format!("<Mappings>\n{lr}{ud}{padding}</Mappings>\n");
+    let out = mouse_axes(text.clone()).unwrap();
+    assert_eq!(out.len(), text.len());
+    // Existing wheel sources remain normalized, and the radio wheel still
+    // gets both axes. Scripted camera input uses relative, scaled motion.
+    assert!(out.contains(&lr) && out.contains(&ud));
+    assert!(out.contains(&item("RADIO_WHEEL_LR", "X")));
+    assert!(out.contains(&item("RADIO_WHEEL_UD", "Y")));
+    for (input, axis) in [("SCALED_LOOK_LR", "X"), ("SCALED_LOOK_UD", "Y")] {
+        assert!(out.contains(&format!(
+            "<Input>INPUT_{input}</Input><Source>IOMS_MOUSE_SCALEDAXIS</Source><Parameters><Item>IOM_AXIS_{axis}</Item></Parameters>"
+        )));
+    }
+    assert_eq!(out.matches("<Item>").count(), out.matches("</Item>").count());
+    assert!(out.ends_with("</Mappings>\n"));
 }
