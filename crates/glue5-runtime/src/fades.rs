@@ -49,6 +49,11 @@ unsafe fn stipple(env: *mut Env, level: u32) {
 /// Hook for `rage::grmShader::BeginDraw(eDrawType, bool, grcEffectTechnique) const`:
 /// the passes to draw (0: none).
 unsafe extern "C" fn shader_begin_draw(env: *mut Env, shader: u64, draw_type: u32, restore: u32, technique: u32) -> u32 {
+    // A new shader must not inherit a previous fallback's stipple if an
+    // engine path bypasses the EndDraw hook.
+    if STIPPLING.swap(false, Ordering::Relaxed) {
+        unsafe { stipple(env, 0) };
+    }
     let passes = unsafe { orig::shader_begin_draw(env, shader, draw_type, restore, technique) };
     // An explicit technique, or one found: as it is.
     if passes != 0 || technique != 0 {
@@ -95,6 +100,10 @@ unsafe extern "C" fn set_stipple_alpha(env: *mut Env, alpha: u32, invert: u32) {
 unsafe extern "C" fn reset_stipple_alpha(env: *mut Env) {
     ALPHA.store(255, Ordering::Relaxed);
     unsafe { orig::reset_stipple_alpha(env) };
+    // This is the engine's explicit end of a fade scope, including paths
+    // which bypass grmShader::EndDraw. Reset the host-side state as well.
+    STIPPLING.store(false, Ordering::Relaxed);
+    unsafe { stipple(env, 0) };
 }
 
 /// This module's hooks.
