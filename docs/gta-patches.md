@@ -412,11 +412,13 @@ Confirmed from the supplied decompilation:
   input block. This proves that GLUE forwards pointer/click data, not that the
   phone movie turns the point into a slot.
 - The decompiled script's ordinary path detects frontend accept and asks the
-  movie for its existing `GET_CURRENT_SELECTION`. Together with the reported
-  symptom (tap opens the preselected Contacts app), this is consistent with
-  the click acting as accept while the movie selection stays unchanged. The
-  exact engine dispatch still needs runtime trace; the tap path does not
-  currently provide an app-slot value to the script.
+  movie for its existing `GET_CURRENT_SELECTION`. The `bf707cd` trace now
+  time-correlates screen taps with that query (for example, tap at `+40865ms`,
+  query at `+40885ms`; tap at `+44868ms`, query at `+44913ms`). This supports
+  that the click reaches the normal selection/accept path. It still does not
+  log the returned slot or the touched coordinates, so it cannot prove the
+  movie selected the icon under the finger; the user has not identified whether
+  these particular taps landed directly on app icons.
 - Therefore the next direct-touch patch needs an explicit coordinate-to-slot
   hit-test plus a narrow way to set/return that slot through the movie/script
   selection path. Swiping through directional steps is navigation only and is
@@ -442,7 +444,7 @@ Confirmed from the supplied decompilation:
   failure, not evidence for or against phone hit-testing. Keep it separate from
   the selection diagnosis.
 
-### Bounded phone-touch trace added for the next run
+### Bounded phone-touch trace and Android run (build `bf707cd`, 2026-10-31)
 
 - The generic GLUE touch layer now keeps a separate 64-line semantic trace,
   without coordinates or finger IDs: `phone_screen gesture=swipe_step` with a
@@ -457,15 +459,34 @@ Confirmed from the supplied decompilation:
   **not** prove the phone movie selected the icon under the finger or expose a
   selected app ID. This generic instrumentation changes no GTA V script/GFX
   variant and does not assume a `data`/`update` mapping.
-- Unit coverage was added for swipe, screen tap, virtual Back down/up and the
-  phone closing while Back is still held. Toolchain/build/device validation is
-  pending; do not call direct icon selection fixed from this trace alone.
+- The user's Android report from `bf707cd` confirms the classification and
+  the shared clock: phone-screen Right steps at `+39423/+39455ms` are followed
+  by `SET_INPUT_EVENT(2)` at `+39458ms`; Left steps are followed by
+  `SET_INPUT_EVENT(4)`, and Down/Up likewise align with events 3/1. Virtual
+  Back entries coincide with `East` pad transitions, separately from swipes.
+- Screen taps at `+40865`, `+44868`, `+57156`, `+63238`, and `+65427ms` are
+  followed by `GET_CURRENT_SELECTION` calls in the movie trace. This is useful
+  temporal evidence, not proof of the selected slot: the report has neither
+  the return value nor touch coordinates, and does not identify whether the
+  taps were directly on app icons.
+- The phone/input-state trace shows one published open and one close in this
+  run, with no repeated `phone out` flicker; the report records no runtime
+  failure. Renderer and GPU performance were not sampled, so this does
+  not resolve or explain the earlier independent Vulkan device-loss report.
+- CI on `bf707cd`: `guard`, `test`, Android type-check, APK/page-alignment
+  build, and import handling passed. The Android import-test job failed only
+  in the menu/sound test step because the new coordinate-safety assertion also
+  matched `key=` as `y=`; the assertion is narrowed to coordinate fields in the
+  follow-up. The semantic trace itself emitted no coordinates. Do not merge
+  until the follow-up CI is green, and do not call direct icon selection fixed
+  from this report alone.
 
-This report closes the need to obtain/decompile these two files again. It does
-not yet identify how the game dispatches the GLUE touch click into its frontend
-accept path, the writer of the special flags, or the exact safe binary
-patch/loader boundary. The exact phone GFXs are already received; no more phone
-assets are needed for this next analysis.
+This report closes the need to obtain/decompile these two files again. The
+`bf707cd` trace supports that a GLUE screen tap reaches a `GET_CURRENT_SELECTION`
+request, but still does not establish that the movie selected the icon under the
+finger or expose the returned slot. The writer of the special flags and the
+exact safe binary patch/loader boundary remain unknown. The exact phone GFXs
+are already received; no more phone assets are needed for this analysis.
 
 ## Phone position patch warning
 

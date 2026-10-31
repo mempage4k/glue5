@@ -1252,7 +1252,7 @@ fn phone_touch_trace_separates_swipes_screen_taps_and_virtual_back() {
     assert!(events.iter().any(|e| e.contains("phone_virtual_key key=Back phase=phone_closed")));
     assert!(events.iter().all(|e| e.starts_with('+') && e.contains("ms ")));
     assert!(
-        events.iter().all(|e| !e.contains("x=") && !e.contains("y=")),
+        events.iter().all(|e| !e.contains(" x=") && !e.contains(" y=")),
         "the semantic trace must not include coordinates"
     );
 }

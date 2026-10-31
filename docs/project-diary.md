@@ -252,3 +252,11 @@ Registro de requisitos, observações e decisões do GLUE 5. **Não incluir dado
 - Touch/gamepad, estado de input do telefone e métodos Scaleform usam agora um relógio monotônico compartilhado (`+Nms`), permitindo comparar a ordem entre gesto, `SET_INPUT_EVENT`, a chamada `GET_CURRENT_SELECTION` e `DISPLAY_VIEW` (sem registrar o valor retornado).
 - Teste unitário cobre swipe, tap, Back e fechamento antes do lift. Ainda não foi executado: `cargo` não está instalado neste sandbox. Sem resultado de build Android ou validação no aparelho nesta etapa.
 - A linha `tap outcome=mouse_click` apenas confirma o clique que o GLUE emitiu; não prova que o filme selecionou o ícone. A navegação por swipe e o Back virtual do teste anterior também não substituem o teste separado de tocar diretamente em um app. A falha Vulkan continua independente e sem amostragem do renderer.
+
+## 2026-10-31 — Relatório Android do trace `bf707cd`
+
+- O usuário executou `bf707cd` no Android com Phone touchscreen ligado e Bigger phone desligado. O novo trace distingue swipes no visor (`phone_screen`) de teclas virtuais (`phone_virtual_key`) sem coordenadas; Back coincide com o pulso `East`, e os swipes Right/Left/Down/Up se alinham respectivamente a `SET_INPUT_EVENT(2/4/3/1)` nos timestamps compartilhados.
+- Os eventos `phone_screen gesture=tap outcome=mouse_click` em `+40865`, `+44868`, `+57156`, `+63238` e `+65427ms` são seguidos por `GET_CURRENT_SELECTION` no trace do filme. Isso correlaciona clique e consulta, mas o trace não registra o slot retornado nem coordenadas; sem confirmação de que os taps foram diretamente em ícones, seleção direta permanece não confirmada.
+- O estado publicado do telefone abre uma vez e fecha uma vez, sem flicker de `phone out` nesta amostra. O relatório não registra falha de runtime, mas Renderer/GPU não foram amostrados; isso não resolve a perda Vulkan anterior.
+- CI em `bf707cd`: `guard` e `test` passaram; no job Android, type-check, APK/page alignment e import handling passaram. O passo de testes de menus/sons falhou só no teste recém-adicionado: a checagem ingênua de `y=` também casava com `key=`. Ajustei a asserção para procurar campos ` x=`/` y=`; a CI do follow-up ainda precisa confirmar.
+- O relatório completo traz caminhos e nomes de saves; eles foram omitidos deste registro.
