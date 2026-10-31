@@ -52,6 +52,34 @@ GLUE already changes some game files as they are read:
   from an extracted directory, from an archive/image, or from memory after the
   archive is parsed.
 
+## Long-term architecture direction: active GLUE–GTA communication and split rendering
+
+On 2026-10-31 the user recorded a future goal, not an implementation request for
+this turn: build a more active, structured communication path between GLUE 5
+and GTA V, and separate the 3D scene's render resolution from the game's HUD
+and menus. The intended result is being able to lower the 3D resolution while
+keeping the HUD/menu legible at the display resolution, and to make game
+mechanisms easier to inspect and control through GLUE.
+
+This is a design direction, not a proven capability or an approved patch plan.
+The code already has specific hooks and input bridges, but no general-purpose
+GLUE–GTA command/telemetry protocol is established. Before implementation:
+
+- Map the process, WASM/host, hook, and renderer boundaries; distinguish the
+  existing narrow hooks from a new general communication channel.
+- Define a small, versioned, bounded contract for observations and commands.
+  Start with read-only telemetry, then add narrowly scoped commands at safe
+  game-owned boundaries; do not expose arbitrary memory writes or fight the
+  game's per-frame state ownership.
+- Map the render passes and targets to establish whether 3D scene and HUD/menu
+  can be rendered or composed independently. Preserve the game's UI at the
+  target display resolution while scaling the 3D scene only if the actual
+  pipeline supports it; account for clears, depth, blending, ordering, and
+  coordinate transforms.
+- Gate any prototype on measurements and a fail-open path. Simply changing
+  output resolution or redirecting a guessed pass is not evidence that the HUD
+  will remain visible or crisp.
+
 Other useful intervention points already present:
 
 - `crates/glue5-runtime/src/script_assets.rs`
@@ -106,52 +134,168 @@ search cannot see inside either RPF; open them with an RPF-aware tool (for
 example OpenIV or CodeWalker) and search/export by entry name. Do **not** ask
 the user to upload either complete RPF.
 
-From `scaleform_generic.rpf`, export the four phone movies listed below. From
-`script_rel.rpf`, export `cellphone_controller` and `cellphone_flashhand` in
-whatever form the archive exposes (commonly `.ysc`); if an entry name differs,
-send only the filtered entry listing first. The exported game files are for
-local analysis outside Git, never for commit.
+## Files received from the user's PC installation on 2026-10-31
 
-### What to request next
+The user uploaded `glue5/cellphone.zip` from Google Drive after exporting from
+OpenIV on the GTA V PC installation described as the Optijuegos 40 GB install.
+It contained six raw Scaleform files: the four story-phone variants requested
+plus `cellphone_alert_popup.gfx` and `cellphone_cutscene.gfx`. The ZIP and
+extracted assets were used only in temporary local analysis; do not add any of
+them to Git.
 
-Ask for a targeted listing rather than the whole tree. On the machine that has
-the extracted data, search below `playgta5.com/data` (or the actual game-data
-root if different) for:
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `cellphone_ifruit.gfx` | 135,963 | `256fc5a858ff83ff60f9f6d25ddcd98b37a64949ba39d38feca0b76212d748c0` |
+| `cellphone_badger.gfx` | 130,397 | `d88ff8ae5ee599f5c26aa8c297ac2084f195a348d4539dd2ad3439418b7d1697` |
+| `cellphone_facade.gfx` | 126,403 | `806b9da50d8fa97b91bc5da197bee66880bcf7e5fa8c5b86ca87a9a382bceba8` |
+| `cellphone_prologue.gfx` | 56,882 | `a6d51e700e994a23dc2c139e95c3b6e65c3550e7e2a91d7b644974488138bdc1` |
+| `cellphone_alert_popup.gfx` | 14,545 | `b63477d5ce0f3bab57bcf5d3852930eaeb17bce946c96b77a382c3c1830c6ecf` |
+| `cellphone_cutscene.gfx` | 6,676 | `70783b90e621769bf27b6e5466078986b39dd93324edc3dbb8b6dfddf38b7b99` |
 
-```text
-cellphone_*.gfx
-cellphone_controller*
-cellphone_flashhand*
-scaleform_generic*
-script_rel*
-```
+The main movies are GFX v8 containers. For inspection only, a temporary copy of
+each header was normalized to the equivalent FWS signature and its AVM1
+(ActionScript 1/2) blocks were disassembled with `swf-toolkit` 0.1.0. The user
+provided originals were not altered. The exact GTA build/revision is still not
+known, so keep all conclusions tied to these hashes until confirmed against
+scripts or runtime traces from the same install.
 
-A useful Windows command from inside the data root is:
+### Additional targeted batch received from Google Drive on 2026-10-31
 
-```bat
-dir /s /b cellphone_*.gfx cellphone_controller* cellphone_flashhand* scaleform_generic* script_rel* > phone-files.txt
-```
+The user added `glue5/assets/assets31-10-26-12-05.zip`. It contains the ten
+requested entries and many related pause-menu movies, textures, scripts, and
+two complete `scaleform_frontend.rpf` archives. The archive was downloaded and
+inspected locally; neither the ZIP nor Rockstar assets belong in Git. Its flat
+entry names do **not** preserve whether a numbered variant came from `data/` or
+`update/`.
 
-If nothing is found, the files are probably still inside an archive/RPF and a
-filesystem tree will not show them. Ask which archive contains Scaleform movies
-or scripts and request an export listing from OpenIV/CodeWalker instead.
+Core entries and observed sizes:
 
-The actual files wanted for local, out-of-Git analysis are:
+| Entry | Bytes / observed variants | Status |
+| --- | ---: | --- |
+| `cellphone_controller.ysc` | 21,331 | Received; raw RSC7 resource, not yet decompiled. |
+| `cellphone_flashhand.ysc` | 13,999 | Received; raw RSC7 resource, not yet decompiled. |
+| `ingamehud.ysc` | 243,234 each | `ingamehud.ysc` and `(1)` are byte-identical. |
+| `pausemenu.ysc` | 422 | Received. |
+| `pausemenu_map.ysc` | 26,740 | Received. |
+| `frontend.xml` | 26,189 / 36,998 | Both variants differ. |
+| `pausemenu.xml` | 209,670 / 248,852 | Both variants differ. |
+| `hud.gfx` | 238,772 | Received. |
+| `minimap.gfx` | 207,370 / 136,647 | Both variants differ. |
+| `pause_menu_pages_settings.gfx` | 50,214 / 60,053 | Both variants differ. |
 
-- `cellphone_ifruit.gfx`
-- `cellphone_badger.gfx`
-- `cellphone_facade.gfx`
-- `cellphone_prologue.gfx`
-- `cellphone_controller.ysc` or its decompiled output, if available
-- `cellphone_flashhand.ysc` or its decompiled output, if available
+The ZIP also contains `pausemenu_multiplayer.ysc`, `pausemenu_sp_repeat.ysc`,
+`pausemenu_example.ysc`, `frontend.awc`, HUD/frontend YTDs, and many more
+`pause_menu_pages_*.gfx`/`.ytd` variants. It includes
+`scaleform_frontend.rpf` (13,664,768 bytes) and
+`scaleform_frontend(1).rpf` (3,047,424 bytes). Keep these local and out of Git.
 
-They should come from the same data/build the user runs in GLUE, not from a
-newer public dump.
+A local RPF table-of-contents cross-check provides only a partial correlation:
+`scaleform_frontend.rpf` has an `OPEN` TOC with 70 entries (69 files), including
+`pause_menu_pages_settings.gfx` with advertised uncompressed size 50,214 and
+`pause_menu_pages_keymap.gfx` at 46,155 bytes. The first size matches the
+non-numbered extracted Settings movie, and the Keymap movie is referenced by
+`pausemenu(1).xml`. However, the payloads are encrypted, so this is not a
+byte-for-byte content match or proof of `data`/`update` origin. The other RPF
+uses NG-encrypted TOC data and cannot be indexed without the matching game
+keys. Keep both archives and all extracted variants in parallel; this does not
+resolve which copy the runtime loads.
+
+**Variant handling is a hard requirement:** the user clarified that numbered
+names represent two intentional game copies, one under `data` and one under
+`update`; they are not accidental duplicates. Never infer which is which from
+`(1)`/`(2)`, discard a differing variant, or select one for a patch until its
+origin/active loading path is established. Byte-identical files may be treated
+as identical for analysis, but retain the knowledge that both sources existed.
+The ZIP flattened the original paths, so the mapping is still unresolved.
+
+### Findings from the additional batch
+
+- The two `ingamehud.ysc` files are byte-for-byte identical. Exact-equal page
+  movie pairs include `pause_menu_pages_char_select.gfx`, `corona.gfx`,
+  `corona_lobby.gfx`, `friends.gfx`, `friends_mp.gfx`, and `store.gfx`.
+  Differing examples include `frontend.xml`, `pausemenu.xml`, `minimap.gfx`,
+  `pause_menu_pages_map.gfx`, and `pause_menu_pages_settings.gfx`. Do not treat
+  a repeated filename as evidence of an identical asset.
+- `frontend(1).xml` has `ReplayHud` and `TextEntryBox` sections, three extra
+  `ScriptHud` components (`HUD_CHIP`, `HUD_CHIP_CHANGE`,
+  `HUD_DIRECTOR_MODE`), replay HUD components, one extra minimap interior, and
+  six additional warning-screen button entries. The 21 core `<Hud>` components
+  remain the same set, but priorities/layout values differ; for example
+  `HUD_WEAPON_WHEEL_STATS.sizeX` is `0.098` vs `0.1156`. Minimap masks and the
+  `GameStream` positions also differ. These are evidence of real layout/schema
+  divergence, not a rendering-pass split.
+- `pausemenu(1).xml` contains 147 `MenuScreen` entries vs 137, and references
+  41 `cGfxFilename` entries vs 39. It adds the
+  `PAUSE_MENU_PAGES_KEYMAP` movie and
+  `FE_MENU_VERSION_LANDING_KEYMAPPING_MENU`; `MISSIONCREATOR` already appears
+  in both variants. Counts of menu options/buttons/preferences also differ.
+- The common `frontend.xml` has malformed comments and missing whitespace
+  between some XML attributes. The comparison parser repaired these issues
+  only in memory; originals were not modified. Treat parse-derived counts as
+  structural inspection, not proof that a standards-compliant XML parser can
+  consume the game's file.
+- Temporary `swf-toolkit` inspection reports `hud.gfx` as GFX/SWF v8, stage
+  1280 × 720 at 30 fps. Its bytecode exposes `SET_DISPLAY_CONFIG` and logic for
+  safe-area/display configuration and HUD component placement. This proves
+  movie-level layout handling only; it does **not** prove that 3D and HUD use
+  separate render targets or resolutions.
+- The two `minimap.gfx` variants are different generations (GFX/SWF v15 vs
+  v10; both stage 191 × 136, but reported rates are 30 vs 49 fps). The
+  pause-map and settings movies inspected are GFX/SWF v8, 868 × 430, 30 fps.
+- Unlike the four phone movies, the pause-menu settings page contains concrete
+  pointer logic in both variants: `mPress`, `_xmouse`/`_ymouse`, and, in one
+  variant, `onPress`/`onRelease` plus hover/out callbacks. The pause-map page
+  also uses `_xmouse` in `mPress`. This is a useful in-game reference for how a
+  Scaleform movie can implement mouse navigation; it is **not** proof that the
+  engine currently dispatches those events to a phone movie. The phone movies
+  still have no pointer handler in their inspected bytecode, so direct phone
+  taps need a phone-specific movie/runtime path, not D-pad automation.
+- The raw phone scripts begin with `RSC7` and resource version `0x0c`. The user
+  later supplied successful same-PC decompilation outputs for both; see
+  "Same-install phone-script decompilation report" below. The Arena sandbox
+  still lacks .NET/Mono, so inspect the supplied outputs locally and do not add
+  Rockstar-derived source to Git. The raw scripts are already received; do not
+  ask the user to upload them again.
+
+The batch helps identify state owners, Scaleform APIs, and layout divergence.
+It does not establish the active `data`/`update` copy, validate a phone patch, or
+prove that the HUD and 3D scene can be rendered at different resolutions. The
+latter still requires GLUE render-target/pass/clear/order analysis. No build or
+device test was run during this asset-inspection step.
 
 ## Phone Scaleform facts established so far
 
-The following comes from public decompiled `cellphone_controller` and
-`cellphone_flashhand` scripts and must be rechecked against the user's build:
+The GFX facts below are from the exact user-supplied movies. Script-flow facts
+now include the user's same-PC decompilation outputs; those are described in
+"Same-install phone-script decompilation report". Treat `func_XX` identifiers
+as generated decompiler labels, not original source names.
+
+### Findings from the exact user-supplied GFX files
+
+- All four requested variants were inspected as AVM1/AS2 bytecode. They are
+  GFX/SWF version 8. The iFruit, Badger, and Facade stages are 256 × 344; the
+  Prologue stage is 256 × 192. Their frame rates differ (60, 30, 30, and 24
+  fps respectively), so preserve each movie's own header/timing when testing a
+  patch.
+- Each phone movie's `SET_INPUT_EVENT` method accepts only direction values
+  1–4 and forwards them to the current interface's `navigate` method as
+  `UP`, `RIGHT`, `DOWN`, or `LEFT`. `GET_CURRENT_SELECTION` asks the current
+  interface for its selection. This directly corroborates the selection path
+  in the public scripts for the supplied movie versions.
+- No pointer-coordinate or mouse-event identifiers were found in the AVM1
+  disassembly of the four main movies (`SET_MOUSE_INPUT`, `GET_MOUSE_POSITION`,
+  `_xmouse`, `_ymouse`, `onPress`, `onRelease`, `onMouseDown`, `hitTest`, or
+  cursor methods). This is strong evidence against a built-in phone-film tap
+  API, though the same-build scripts and runtime traces are still needed to
+  close the loop.
+- `SF_BASE_CLASS_MOUSE` appears in the three normal story movies, but its
+  disassembly use is only as the value 10 in the generic
+  `GameInterface` external-interface type enumeration; it does not implement
+  or identify a mouse-coordinate handler. Do not treat the string by itself as
+  evidence of touch support.
+- The extra `cellphone_alert_popup.gfx` and `cellphone_cutscene.gfx` were also
+  received and scanned. Keep them available for later call/popup/cutscene
+  coverage, but they are separate from the four primary story-phone variants.
 
 - One movie handle is used for the story phone. The script requests:
   - `cellphone_badger` for Franklin;
@@ -159,7 +303,8 @@ The following comes from public decompiled `cellphone_controller` and
   - `cellphone_facade` for Trevor;
   - `cellphone_prologue` in the prologue.
   A patch for only `cellphone_ifruit` is incomplete.
-- The phone is selection-driven, not pointer-driven:
+- In the inspected code, the app-launch path is selection-driven; a direct
+  pointer-to-slot path has not been found:
   - the script sends `SET_INPUT_EVENT(1)` for up, `(2)` for right, `(3)` for
     down, and `(4)` for left;
   - in keyboard-and-mouse mode, controls 180 and 181 (phone scroll forward and
@@ -190,6 +335,98 @@ The following comes from public decompiled `cellphone_controller` and
   movie methods", recording `SET_INPUT_EVENT(n)`, `DISPLAY_VIEW(view,
   selection)`, and `GET_CURRENT_SELECTION`, bounded to 64 lines. Use it to see
   what the actual build does around a tap before choosing an injection point.
+
+### Same-install phone-script decompilation report (2026-10-31)
+
+The user supplied Desktop Commander outputs for the two raw scripts, with the
+reported input sizes matching the targeted exports:
+
+| Input | Input bytes | Decompiled C output bytes |
+| --- | ---: | ---: |
+| `cellphone_controller.ysc` | 21,331 | 176,874 |
+| `cellphone_flashhand.ysc` | 13,999 | 153,958 |
+
+The report says both commands exited 0 and logged `All done & saved!`. It used
+`maybegreat48/GTA-V-Script-Decompiler`, commit
+`2958d816e8f6db02a399c7b570c7074a0b2b1567`; the local build target was adjusted
+to .NET SDK 10.0.103. The repo does not declare a license, so do not vendor or
+redistribute its code or the full decompiled Rockstar scripts. The user's
+outputs/logs are analysis material only and are not in Git.
+
+Confirmed from the supplied decompilation:
+
+- `cellphone_flashhand::func_83` fills home-screen slots with `SET_DATA_SLOT`
+  and builds `Global_8786[slot] = app_id`.
+- `func_20` requests `GET_CURRENT_SELECTION` on a normal frontend accept
+  (`Global_20352`) or under special conditions (`Global_8254` bit 10 or local
+  `iLocal_122 == 1`). The result is asynchronous; `func_44` reads it, maps the
+  selected slot through `Global_8786`, and follows the game's existing app
+  start/request path.
+- This is an existing **selection-return/confirm path**, not a pointer hit
+  test. It returns whatever selection the Scaleform currently has; by itself
+  it does not select the icon under a finger or prove that a touch event reaches
+  the movie. `SET_INPUT_EVENT`/`CELL_SET_INPUT` values 1–4 remain directional
+  navigation.
+- The special flags are not generic tapped-slot selectors. Bit 10 forces
+  script app ID 2 (Internet in the populated home-screen table) and is cleared.
+  When `Global_2803654 == 1`, the main loop schedules `iLocal_122`; the next
+  selection return is forced to app ID 0 (Contacts in the populated table) and
+  the flag is cleared. In these two scripts, there is no write setting bit 10
+  or `Global_2803654` to 1; only reads/clears/resets appear. No literal `TOUCH`
+  string was found. Their producers, if relevant, are outside these two scripts.
+- The same-install scripts also confirm the position writers. In
+  `cellphone_flashhand.func_111` (decompiler position `0x7263`): for HD the
+  visible endpoint `Global_20329[0]` is
+  `{GET_SAFE_ZONE_SIZE()*117.2,
+  GET_SAFE_ZONE_SIZE()*-158.8, -113}` and the hidden endpoint
+  `Global_20336[0]` is `{GET_SAFE_ZONE_SIZE()*117.2,
+  GET_SAFE_ZONE_SIZE()*-53.3, -113}`. Non-HD uses visible
+  `{GET_SAFE_ZONE_SIZE()*85.7, GET_SAFE_ZONE_SIZE()*-121.8, -91.5}` and
+  hidden `{GET_SAFE_ZONE_SIZE()*85.7, GET_SAFE_ZONE_SIZE()*-35.3, -91.5}`.
+  It initializes `Global_20311` from the visible endpoint and calls
+  `SET_MOBILE_PHONE_POSITION`; `func_15` (decompiler position `0x277E`)
+  interpolates the phone animation between endpoints and calls that native,
+  and `func_5` (position `0x2036`) sets the position during transitions.
+  `cellphone_controller.func_89` (position `0x4F5D`) has a parallel transition
+  path and also calls `SET_MOBILE_PHONE_POSITION`.
+  `SET_MOBILE_PHONE_SCALE(500f/575f)` appears in separate flashhand state paths;
+  its role as a user-facing enlargement control has not been established. A
+  community native reference describes 500 as minimum/default, warns that
+  scale resets on close, and recommends adjusting position for a larger scale;
+  treat that as a candidate to test, not validation for this game build
+  ([Cfx native reference](https://docs.fivem.net/natives/?_0x41F37C3427C75AE0=)).
+  The native position boundary is shared by both scripts; writing `CPhoneMgr`
+  position from a separate per-frame hook would still race the game's writers.
+- The practical direct-touch route remains: obtain the tapped slot from the
+  phone movie/runtime, then let the existing script map that slot to its app
+  and launch it. A movie-side hit test/selection setter or a narrowly filtered
+  Scaleform-result intervention could be explored; it must preserve the normal
+  app table and both `Global_20387/Global_20388` return-selection state. Do not
+  use directional stepping as the final solution.
+
+### Cross-check with the current GLUE touch path
+
+- `Touch::Finger::Phone` keeps the actual screen point; a tap emits a mouse
+  click there, while a swipe emits directional pad steps. `App` forwards the
+  pointer position, relative motion, and mouse-button state through the game's
+  input block. This proves that GLUE forwards pointer/click data, not that the
+  phone movie turns the point into a slot.
+- The decompiled script's ordinary path detects frontend accept and asks the
+  movie for its existing `GET_CURRENT_SELECTION`. Together with the reported
+  symptom (tap opens the preselected Contacts app), this is consistent with
+  the click acting as accept while the movie selection stays unchanged. The
+  exact engine dispatch still needs runtime trace; the tap path does not
+  currently provide an app-slot value to the script.
+- Therefore the next direct-touch patch needs an explicit coordinate-to-slot
+  hit-test plus a narrow way to set/return that slot through the movie/script
+  selection path. Swiping through directional steps is navigation only and is
+  not an acceptable final substitute.
+
+This report closes the need to obtain/decompile these two files again. It does
+not yet identify how the game dispatches the GLUE touch click into its frontend
+accept path, the writer of the special flags, or the exact safe binary
+patch/loader boundary. The exact phone GFXs are already received; no more phone
+assets are needed for this next analysis.
 
 ## Phone position patch warning
 

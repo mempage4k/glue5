@@ -591,7 +591,7 @@ pub(crate) unsafe extern "C" fn param_int(env: *mut Env, value: u32) {
         }
     }
     if let Some((kind, n, first)) = PHONE_METHOD.get() {
-        PHONE_METHOD.set(Some((kind, n + 1, if n == 0 { value as i32 } else { first }));
+        PHONE_METHOD.set(Some((kind, n + 1, if n == 0 { value as i32 } else { first })));
         match (kind, n) {
             // The phone's steps and choices: 1 up, 2 right, 3 down, 4 left
             // (the movie's own numbering, as its script sends them).

@@ -717,7 +717,7 @@ fn settings_items(
             switch_row(
                 ui,
                 "Phone touchscreen input",
-                "Experimental: while the phone is out, taps land on its screen. Off, the pad drives the phone (D-pad and buttons) instead",
+                "Experimental: use mouse-mode input while the phone is out; a tap may still accept the current app. Off, keep pad mode (D-pad and buttons)",
                 &mut settings.phone_touchscreen,
             );
             switch_row(

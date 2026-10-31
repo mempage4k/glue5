@@ -1180,11 +1180,11 @@ fn with_the_phone_out_unplaced_a_tap_on_its_place_presses_no_button() {
     assert_eq!(t.gamepad().buttons, 0, "the tap must not put the phone away");
 }
 
-/// With the phone out, a tap clicks its actual screen coordinate instead of
-/// accepting the app that happened to be highlighted; swipes remain available
-/// for directional navigation and neither gesture moves or turns the player.
+/// With the phone out, a tap emits a mouse click at its screen coordinate;
+/// the touch layer does not choose a phone app slot. Swipes remain available
+/// for directional navigation, and neither gesture moves or turns the player.
 #[test]
-fn the_phone_screen_takes_direct_taps_and_keeps_swipe_navigation() {
+fn the_phone_screen_emits_pointer_clicks_and_keeps_swipe_navigation() {
     let mut t = phone();
     t.set_context(PlayerContext { phone: true, ..context(Activity::OnFoot) });
     t.set_game(Vec::new(), Some(phone_at(t.screen.x / t.screen.y)));
@@ -1194,12 +1194,12 @@ fn the_phone_screen_takes_direct_taps_and_keeps_swipe_navigation() {
     let pointer = t.take_mouse().at.unwrap();
     assert!(
         (pointer.x - x).abs() < 1.0e-6 && (pointer.y - y).abs() < 1.0e-6,
-        "pointer follows the touched app"
+        "pointer follows the touched screen point"
     );
     t.finger_up(1);
     let click = t.take_mouse();
-    assert!(click.down, "a tap clicks the touched point");
-    assert_eq!(t.gamepad().buttons & button::SOUTH, 0, "do not launch the old selection");
+    assert!(click.down, "a tap emits a mouse click at that point");
+    assert_eq!(t.gamepad().buttons & button::SOUTH, 0, "the touch layer does not synthesize gamepad Select");
     assert_eq!(t.gamepad().left, [0.0, 0.0]);
 
     t.finger_down(2, x, y);
@@ -1212,7 +1212,7 @@ fn the_phone_screen_takes_direct_taps_and_keeps_swipe_navigation() {
     assert_eq!(t.gamepad().buttons & button::RIGHT, button::RIGHT, "then right");
     t.finger_up(2);
     assert!(!t.take_mouse().down, "a swipe is not an accidental click");
-    assert_eq!(t.gamepad().buttons & button::SOUTH, 0, "a swipe does not select");
+    assert_eq!(t.gamepad().buttons & button::SOUTH, 0, "a swipe does not press gamepad Select");
     assert_eq!(t.look, Vec2::ZERO, "nor turns the camera");
 }
 

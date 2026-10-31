@@ -319,11 +319,9 @@ impl PhoneOut {
 
 static PHONE_STATE: Mutex<PhoneOut> = Mutex::new(PhoneOut::new());
 
-/// While the phone is out, whether it is driven as a touchscreen (the input
-/// device switches to keyboard/mouse so taps on the phone's screen land) or
-/// left on the pad (D-pad and buttons). A settings switch: if the phone
-/// cycles open/closed on a build, this tells the device switch apart from
-/// the game cycling on its own.
+/// While the phone is out, whether the active device is marked as
+/// keyboard/mouse or left on the pad (D-pad and buttons). The phone movie's
+/// selected app is not changed here; a tap-to-slot bridge is still needed.
 static PHONE_TOUCHSCREEN: AtomicBool = AtomicBool::new(true);
 
 /// The phone's raw bytes, the state published from them and the device
@@ -498,8 +496,8 @@ pub fn set_touch_play(on: bool) {
     TOUCH_PLAY.store(on, Ordering::Relaxed);
 }
 
-/// The phone, while out, is driven by taps on its own screen (the input
-/// device switches to keyboard/mouse for it) rather than by the pad.
+/// Mark the active device as keyboard/mouse rather than pad while the phone
+/// is out. This alone does not select the app under the finger.
 pub fn set_phone_touchscreen(on: bool) {
     PHONE_TOUCHSCREEN.store(on, Ordering::Relaxed);
 }
@@ -762,10 +760,10 @@ pub(crate) unsafe extern "C" fn control_update(env: *mut Env, this: u64) {
         // minigame that loaded its own keyboard and mouse scheme (its
         // controls change with it): the pad, as made for touch.
         let fresh = |t: Option<Instant>| t.is_some_and(|t| t.elapsed() < FRESH);
-        // The phone's app screen now receives direct touch taps through the
-        // mouse input block, so keep its mouse-driven Scaleform controls
-        // active while the phone is out during touch play too — unless the
-        // phone is being driven by the pad instead (a settings switch).
+        // Forward phone-area taps through mouse input while this option is
+        // on. The same-install scripts read the movie's current selection;
+        // this device switch alone does not prove that pointer coordinates
+        // select the icon under the finger.
         let phone_screen = phone_out && PHONE_TOUCHSCREEN.load(Ordering::Relaxed);
         let mouse = !minigame && (frontend || bar || scripted || pointer || fresh(*CURSOR_AT.lock().unwrap()) || phone_screen);
         mem.set_i32(LAST_DEVICE, if mouse { KEYBOARD_MOUSE } else { 0 });

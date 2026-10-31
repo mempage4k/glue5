@@ -100,10 +100,10 @@ pub struct Settings {
     pub touch_tilt_full_lock: f32,
     /// Touch-control taps and the game's rumble on devices with haptic feedback.
     pub haptics: bool,
-    /// The phone, while out, takes taps on its own screen (the game's input
-    /// device switches to keyboard/mouse for it). Off, the pad drives the
-    /// phone instead (D-pad and buttons): an experimental switch, for
-    /// telling a phone that cycles open/closed apart.
+    /// While the phone is out, mark the active input device as
+    /// keyboard/mouse rather than pad (D-pad and buttons). This does not
+    /// itself select an app slot; direct hit-testing is still under
+    /// investigation.
     pub phone_touchscreen: bool,
     /// The phone, while out on touch controls, is brought nearer so it
     /// shows bigger. Off by default: as done today — the phone's place in

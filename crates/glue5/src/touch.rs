@@ -665,7 +665,8 @@ const LOOK_GAIN: f32 = 16.0;
 /// tremor stays in the game's dead zone). A mouse's motion would break the
 /// lock instead.
 const LOCKED_SWIPE: f32 = 8.0;
-/// A swipe on the game's phone steps its selection every this many points.
+/// A swipe on the game's phone emits a directional selection step every
+/// this many points; it is navigation, not direct app hit-testing.
 const PHONE_STEP: f32 = 30.0;
 /// The phone button's pulse stands until the game shows the phone out,
 /// or this long (it did not open: the tap may be tried again). Its button
@@ -720,9 +721,10 @@ enum Finger {
     Mouse { origin: Pos2, at: Pos2, since: Instant, drag: Option<Drag> },
     Pinch(Pos2),
     MenuKey(MenuKey),
-    /// On the game's phone: a tap clicks the point under the finger; a
-    /// swipe still steps its selection (where it landed or last stepped,
-    /// where it is, steps made).
+    /// On the game's phone: a tap emits a mouse click at the finger's
+    /// screen point; a swipe emits directional steps (where it landed or
+    /// last stepped, where it is, steps made). Neither is a tapped-slot
+    /// selection by itself.
     Phone { origin: Pos2, at: Pos2, steps: u32 },
     /// On a debug touch area: where the finger is (a tap there does the
     /// area's action when it lifts inside it, or pulsed its button at
@@ -1795,9 +1797,10 @@ impl Touch {
             self.touch_finger(p)
         };
         if matches!(finger, Finger::Phone { .. }) {
-            // The game's phone screen is a direct-touch target. Keep its
-            // pointer at the actual tap rather than accepting whichever app
-            // the D-pad happened to leave selected.
+            // Forward the actual screen point through the mouse-input path.
+            // The inspected phone scripts/movies do not establish that this
+            // changes the phone movie's selected slot; a tap may still accept
+            // the game's current selection until a selection bridge exists.
             self.mouse_at = Some(p);
             self.click = None;
         }
@@ -2009,7 +2012,8 @@ impl Touch {
             self.mouse_at = Some(p);
             let d = p - *origin;
             if d.x.abs().max(d.y.abs()) >= PHONE_STEP * self.scale {
-                // The selection follows the finger, as on a touchpad.
+                // Preserve swipe navigation as directional steps. This is not
+                // the direct-tap app selection the phone path still needs.
                 self.pressed |= if d.y.abs() >= d.x.abs() {
                     if d.y < 0.0 { button::UP } else { button::DOWN }
                 } else if d.x < 0.0 {
@@ -2166,9 +2170,9 @@ impl Touch {
         }
         match self.fingers.remove(&id) {
             // A debug area's click goes where the player taught it (its
-            // centre), as the phone's own taps click their point, when the
-            // finger lifts still inside it; its button already pulsed when
-            // the finger landed.
+            // centre); a phone-area tap instead emits a mouse click at the
+            // finger's screen point. Neither action here chooses a phone app
+            // slot; the game's selection bridge remains separate.
             Some(Finger::DebugArea { area, at, .. }) => {
                 if let Some(taken) = self.debug_areas.get(area).cloned()
                     && taken.action == DebugTouchAction::Click
@@ -2195,9 +2199,10 @@ impl Touch {
             Some(Finger::DebugEdit { .. }) => {}
             Some(Finger::Pinch(_)) => self.two = None,
             Some(Finger::Phone { origin, at, steps: 0 }) if origin.distance(at) <= TAP_SLOP * self.scale => {
-                // A tap accepts at its screen coordinate. Do not press South:
-                // that would launch the previously highlighted app instead
-                // of the one the player touched.
+                // Emit a mouse click at the screen point. This click can
+                // reach the game's accept path, but the phone movie's current
+                // selection is not changed here; direct slot selection needs
+                // a separate bridge. Do not synthesize a gamepad South press.
                 let from = Instant::now();
                 self.click = Some((from, from + MIN_PRESS));
                 if self.haptics {

@@ -1077,10 +1077,9 @@ impl App {
                     input.mouse_position(x, y);
                     // A real mouse reports its travel as well as where it
                     // stands, so a new touch pointer position reports both
-                    // (the pause menu's cursor moves by the travel). Whether
-                    // the phone's movie uses either is what the support
-                    // report's phone-movie trace now shows: its script
-                    // drives the movie by selection, not by pointer.
+                    // (the pause menu's cursor moves by the travel). The
+                    // phone script uses selection methods; this input write
+                    // alone does not prove its movie hit-tests the pointer.
                     if let Some(was) = self.touch_mouse.at {
                         let (dx, dy) = (x - (was.x * w as f32) as i32, y - (was.y * h as f32) as i32);
                         if (dx, dy) != (0, 0) {
