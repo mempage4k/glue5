@@ -260,3 +260,9 @@ Registro de requisitos, observações e decisões do GLUE 5. **Não incluir dado
 - O estado publicado do telefone abre uma vez e fecha uma vez, sem flicker de `phone out` nesta amostra. O relatório não registra falha de runtime, mas Renderer/GPU não foram amostrados; isso não resolve a perda Vulkan anterior.
 - CI em `bf707cd`: `guard` e `test` passaram; no job Android, type-check, APK/page alignment e import handling passaram. O passo de testes de menus/sons falhou só no teste recém-adicionado: a checagem ingênua de `y=` também casava com `key=`. Ajustei a asserção para procurar campos ` x=`/` y=`; a CI do follow-up ainda precisa confirmar.
 - O relatório completo traz caminhos e nomes de saves; eles foram omitidos deste registro.
+
+## 2026-10-31 — Comportamento de toque direto confirmado pelo usuário
+
+- O usuário esclareceu que o touchscreen o leva a Contacts; ele desliza até Messages e toca no contato Trevor enquanto Michael está pré-selecionado, mas o jogo abre as mensagens de Michael. Um toque em qualquer lugar confirma a seleção atual em vez de movê-la para o item tocado.
+- Isso confirma a hipótese sugerida pela correlação `phone_screen tap` → `GET_CURRENT_SELECTION`: o clique chega ao caminho normal de accept, mas o filme mantém seu item atual. Os traces não carregam coordenadas nem o slot retornado, então não identificam o target individual de cada tap.
+- Próximo trabalho de seleção deve acrescentar hit-test no limite do filme/runtime e atualizar o slot antes do fluxo normal do script; preservar o mapeamento existente de slots/apps e cobrir as quatro variantes. Nenhuma alteração de YSC/GFX foi feita nesta atualização.

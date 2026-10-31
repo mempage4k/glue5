@@ -415,10 +415,14 @@ Confirmed from the supplied decompilation:
   movie for its existing `GET_CURRENT_SELECTION`. The `bf707cd` trace now
   time-correlates screen taps with that query (for example, tap at `+40865ms`,
   query at `+40885ms`; tap at `+44868ms`, query at `+44913ms`). This supports
-  that the click reaches the normal selection/accept path. It still does not
-  log the returned slot or the touched coordinates, so it cannot prove the
-  movie selected the icon under the finger; the user has not identified whether
-  these particular taps landed directly on app icons.
+  that the click reaches the normal selection/accept path. The user has now
+  confirmed the behavior directly: touchscreen use opens Contacts; after
+  swiping to Messages, a tap anywhere confirms the highlighted contact. With
+  Michael highlighted, touching Trevor opens Michael's messages. The touch
+  therefore acts as confirm/accept on the current selection, not as a coordinate
+  hit-test. The report still does not
+  log the returned slot or touch coordinates, so those timestamps cannot be
+  tied to a particular on-screen target.
 - Therefore the next direct-touch patch needs an explicit coordinate-to-slot
   hit-test plus a narrow way to set/return that slot through the movie/script
   selection path. Swiping through directional steps is navigation only and is
@@ -465,10 +469,12 @@ Confirmed from the supplied decompilation:
   `SET_INPUT_EVENT(4)`, and Down/Up likewise align with events 3/1. Virtual
   Back entries coincide with `East` pad transitions, separately from swipes.
 - Screen taps at `+40865`, `+44868`, `+57156`, `+63238`, and `+65427ms` are
-  followed by `GET_CURRENT_SELECTION` calls in the movie trace. This is useful
-  temporal evidence, not proof of the selected slot: the report has neither
-  the return value nor touch coordinates, and does not identify whether the
-  taps were directly on app icons.
+  followed by `GET_CURRENT_SELECTION` calls in the movie trace. This correlates
+  click and query, but the report has neither the returned value nor touch
+  coordinates, so it cannot identify each timestamp's exact target. The user's
+  separate behavior description confirms the semantic failure: touching Trevor
+  while Michael is highlighted opens Michael's messages, i.e. current selection
+  is accepted instead of being moved to the touched row.
 - The phone/input-state trace shows one published open and one close in this
   run, with no repeated `phone out` flicker; the report records no runtime
   failure. Renderer and GPU performance were not sampled, so this does
