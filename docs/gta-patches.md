@@ -422,6 +422,25 @@ Confirmed from the supplied decompilation:
   selection path. Swiping through directional steps is navigation only and is
   not an acceptable final substitute.
 
+### Android runtime evidence (build `eeb689c`, 2026-10-31)
+
+- The user ran the build with Phone touchscreen input on and Bigger phone off.
+  While the phone was published as out, the input-device trace changed to
+  keyboard/mouse and `pos_z` stayed at `-91.5`; this run did not exercise the
+  enlargement override.
+- The movie-method trace contains `SET_INPUT_EVENT(1..4)`, several
+  `GET_CURRENT_SELECTION` calls, and home-page `DISPLAY_VIEW(1, n)` calls with
+  different selection values. This confirms the existing navigation and
+  selection/confirm path ran. The trace does **not** log the integer returned
+  by `GET_CURRENT_SELECTION`, the touch point, or which gesture preceded each
+  call, so it cannot establish whether direct taps opened the icon under the
+  finger. The user's description says multiple apps were selected, but the
+  gesture/result still needs clarification.
+- The same report ends with a Vulkan GPU-device-lost failure on Mali-G78. Its
+  renderer snapshot was not sampled, so this is a separate unresolved graphics
+  failure, not evidence for or against phone hit-testing. Keep it separate from
+  the selection diagnosis.
+
 This report closes the need to obtain/decompile these two files again. It does
 not yet identify how the game dispatches the GLUE touch click into its frontend
 accept path, the writer of the special flags, or the exact safe binary
