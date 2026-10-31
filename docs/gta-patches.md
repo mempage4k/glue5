@@ -434,12 +434,32 @@ Confirmed from the supplied decompilation:
   selection/confirm path ran. The trace does **not** log the integer returned
   by `GET_CURRENT_SELECTION`, the touch point, or which gesture preceded each
   call, so it cannot establish whether direct taps opened the icon under the
-  finger. The user's description says multiple apps were selected, but the
-  gesture/result still needs clarification.
+  finger. The user later clarified that this test navigated with swipes on the
+  phone screen and exited with the interface's virtual Back button; it was not
+  a direct-tap selection test of each app icon.
 - The same report ends with a Vulkan GPU-device-lost failure on Mali-G78. Its
   renderer snapshot was not sampled, so this is a separate unresolved graphics
   failure, not evidence for or against phone hit-testing. Keep it separate from
   the selection diagnosis.
+
+### Bounded phone-touch trace added for the next run
+
+- The generic GLUE touch layer now keeps a separate 64-line semantic trace,
+  without coordinates or finger IDs: `phone_screen gesture=swipe_step` with a
+  direction/count, a `swipe_end` summary, `tap outcome=mouse_click`, or a
+  non-navigating drag/cancel; virtual overlay keys are explicit as
+  `phone_virtual_key key=Back phase=down/up/phone_closed` (and likewise for
+  D-pad/Select).
+- Touch/gamepad output, phone/input-device transitions, and phone Scaleform
+  methods now use the same monotonic `+Nms` clock. Their ordering can be
+  compared in the report; timestamps are process-relative, not wall time.
+- A screen `tap` line proves only that GLUE emitted its mouse click. It does
+  **not** prove the phone movie selected the icon under the finger or expose a
+  selected app ID. This generic instrumentation changes no GTA V script/GFX
+  variant and does not assume a `data`/`update` mapping.
+- Unit coverage was added for swipe, screen tap, virtual Back down/up and the
+  phone closing while Back is still held. Toolchain/build/device validation is
+  pending; do not call direct icon selection fixed from this trace alone.
 
 This report closes the need to obtain/decompile these two files again. It does
 not yet identify how the game dispatches the GLUE touch click into its frontend
@@ -490,19 +510,23 @@ Use Bigger phone **off** and Phone touchscreen input **on** unless the test is
 specifically about Bigger phone. Ask the user to:
 
 1. open the phone;
-2. swipe once on the phone screen;
-3. tap an app other than the pre-selected one;
-4. press Back;
-5. copy the Import report immediately.
+2. swipe once on the phone screen (navigation gesture);
+3. directly tap a visible app icon, if testing direct selection—not a swipe or
+   one of the side keys;
+4. tap the interface's virtual Back key to exit (not a physical/system Back);
+5. copy the Import report immediately, or share only the four phone/input
+   sections below to avoid unrelated paths and save names.
 
 Read, in order:
 
-- touch trace: what GLUE emitted (but remember directional steps there can be
-  swipes on the phone screen, not touches on the side D-pad keys);
-- phone/input-device trace: `CPhoneMgr` bytes, published phone state, device,
-  and `pos_z`;
-- phone movie methods: the script's actual `SET_INPUT_EVENT`, `DISPLAY_VIEW`,
-  and `GET_CURRENT_SELECTION` sequence.
+- **phone touchscreen trace:** `phone_screen` swipe/tap versus
+  `phone_virtual_key` such as Back, all without coordinates;
+- **virtual touch/gamepad trace:** buttons and pad output emitted by GLUE;
+- **phone/input-device trace:** `CPhoneMgr` bytes, published phone state,
+  device, and `pos_z`;
+- **phone movie methods:** the script's actual `SET_INPUT_EVENT`,
+  `DISPLAY_VIEW`, and `GET_CURRENT_SELECTION` sequence.
 
-Do not interpret a directional pulse as use of the layout's phone keys without
-asking; the touch layer converts a swipe on the phone into directional steps.
+All four sections share the process-relative `+Nms` clock in the new build.
+Older reports have no semantic phone-touch section, so a directional pulse by
+itself can be either a phone-screen swipe or a side D-pad key.

@@ -196,13 +196,6 @@ const ICON_FILES: &[(&str, &[u8])] = icons![
 /// The icons' textures, by name.
 type Icons = HashMap<&'static str, egui::TextureHandle>;
 
-/// The support trace's clock: milliseconds since its first line, so a
-/// repeating pattern (the phone cycling, say) shows its rhythm.
-fn diagnostic_clock() -> Instant {
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    *START.get_or_init(Instant::now)
-}
-
 fn load_icons(ctx: &egui::Context) -> Icons {
     ICON_FILES.iter().filter_map(|(name, _)| load_icon(ctx, name).map(|t| (*name, t))).collect()
 }
@@ -847,6 +840,9 @@ pub struct Touch {
     /// support reports. It records outputs, not finger coordinates.
     diagnostic_pad: Option<(u16, [i16; 2], [i16; 2], u8, u8)>,
     diagnostic_events: VecDeque<String>,
+    /// Phone-screen gestures and the separate virtual phone keys, without
+    /// recording finger coordinates.
+    phone_touch_events: VecDeque<String>,
 }
 
 /// Two fingers in the pause menu: how far apart they were last and the
@@ -936,6 +932,7 @@ impl Touch {
             two: None,
             diagnostic_pad: None,
             diagnostic_events: VecDeque::new(),
+            phone_touch_events: VecDeque::new(),
         }
     }
 
@@ -945,6 +942,24 @@ impl Touch {
         self.diagnostic_events.iter().cloned().collect()
     }
 
+    /// Recent phone-screen gestures and virtual phone-key transitions. This
+    /// is separate from gamepad output; it records no coordinates or finger IDs.
+    pub fn phone_touch_diagnostics(&self) -> Vec<String> {
+        self.phone_touch_events.iter().cloned().collect()
+    }
+
+    fn phone_key_name(index: usize) -> &'static str {
+        match index {
+            0 => "Up",
+            1 => "Down",
+            2 => "Left",
+            3 => "Right",
+            4 => "Select",
+            5 => "Back",
+            _ => "Unknown",
+        }
+    }
+
     /// A line for the support report's touch trace (bounded, no finger
     /// coordinates).
     fn record_diagnostic(&mut self, line: String) {
@@ -952,7 +967,15 @@ impl Touch {
         if self.diagnostic_events.len() == LIMIT {
             self.diagnostic_events.pop_front();
         }
-        self.diagnostic_events.push_back(format!("+{}ms {line}", diagnostic_clock().elapsed().as_millis()));
+        self.diagnostic_events.push_back(format!("+{}ms {line}", glue5_runtime::diagnostics_elapsed_ms()));
+    }
+
+    fn record_phone_touch_diagnostic(&mut self, line: String) {
+        const LIMIT: usize = 64;
+        if self.phone_touch_events.len() == LIMIT {
+            self.phone_touch_events.pop_front();
+        }
+        self.phone_touch_events.push_back(format!("+{}ms {line}", glue5_runtime::diagnostics_elapsed_ms()));
     }
 
     fn record_gamepad(&mut self, pad: &Gamepad) {
@@ -1084,11 +1107,14 @@ impl Touch {
         }
         if phone_closed {
             // The phone's keys are gone with it: one still held (Back, say)
-            // must not go on pressing in play under its old name.
+            // must not go on pressing in play under its old name. Keep the
+            // release reason in the semantic trace if Back itself closed it.
             let mut released = 0;
+            let mut phone_keys = Vec::new();
             self.fingers.retain(|_, finger| {
-                if let Finger::Button { key: Key::Phone(_), bits, .. } = finger {
+                if let Finger::Button { key: Key::Phone(index), bits, .. } = finger {
                     released |= *bits;
+                    phone_keys.push(*index);
                     false
                 } else {
                     true
@@ -1096,6 +1122,12 @@ impl Touch {
             });
             self.pressed &= !released;
             self.pressed_inputs.clear();
+            for index in phone_keys {
+                self.record_phone_touch_diagnostic(format!(
+                    "phone_virtual_key key={} phase=phone_closed",
+                    Self::phone_key_name(index)
+                ));
+            }
         }
         if !self.aims_here() {
             self.aim_sticky = false;
@@ -1796,6 +1828,10 @@ impl Touch {
         } else {
             self.touch_finger(p)
         };
+        let phone_key = match finger {
+            Finger::Button { key: Key::Phone(index), .. } => Some(index),
+            _ => None,
+        };
         if matches!(finger, Finger::Phone { .. }) {
             // Forward the actual screen point through the mouse-input path.
             // The inspected phone scripts/movies do not establish that this
@@ -1834,6 +1870,12 @@ impl Touch {
             }
         }
         self.fingers.insert(id, finger);
+        if let Some(index) = phone_key {
+            self.record_phone_touch_diagnostic(format!(
+                "phone_virtual_key key={} phase=down",
+                Self::phone_key_name(index)
+            ));
+        }
     }
 
     /// Whether the phone button may pulse Up now (its only [`Kind::Tap`]
@@ -2007,25 +2049,35 @@ impl Touch {
             *at = p;
             return;
         }
-        if let Some(Finger::Phone { origin, at, steps }) = self.fingers.get_mut(&id) {
-            *at = p;
-            self.mouse_at = Some(p);
-            let d = p - *origin;
-            if d.x.abs().max(d.y.abs()) >= PHONE_STEP * self.scale {
-                // Preserve swipe navigation as directional steps. This is not
-                // the direct-tap app selection the phone path still needs.
-                self.pressed |= if d.y.abs() >= d.x.abs() {
-                    if d.y < 0.0 { button::UP } else { button::DOWN }
-                } else if d.x < 0.0 {
-                    button::LEFT
-                } else {
-                    button::RIGHT
-                };
-                *steps += 1;
-                *origin = p;
-                if self.haptics {
-                    haptics::tap();
+        if matches!(self.fingers.get(&id), Some(Finger::Phone { .. })) {
+            let mut swipe_step = None;
+            if let Some(Finger::Phone { origin, at, steps }) = self.fingers.get_mut(&id) {
+                *at = p;
+                self.mouse_at = Some(p);
+                let d = p - *origin;
+                if d.x.abs().max(d.y.abs()) >= PHONE_STEP * self.scale {
+                    // Preserve swipe navigation as directional steps. This is not
+                    // the direct-tap app selection the phone path still needs.
+                    let (direction, bit) = if d.y.abs() >= d.x.abs() {
+                        if d.y < 0.0 { ("Up", button::UP) } else { ("Down", button::DOWN) }
+                    } else if d.x < 0.0 {
+                        ("Left", button::LEFT)
+                    } else {
+                        ("Right", button::RIGHT)
+                    };
+                    self.pressed |= bit;
+                    *steps += 1;
+                    *origin = p;
+                    swipe_step = Some((direction, *steps));
+                    if self.haptics {
+                        haptics::tap();
+                    }
                 }
+            }
+            if let Some((direction, count)) = swipe_step {
+                self.record_phone_touch_diagnostic(format!(
+                    "phone_screen gesture=swipe_step direction={direction} count={count}"
+                ));
             }
             return;
         }
@@ -2205,9 +2257,22 @@ impl Touch {
                 // a separate bridge. Do not synthesize a gamepad South press.
                 let from = Instant::now();
                 self.click = Some((from, from + MIN_PRESS));
+                self.record_phone_touch_diagnostic("phone_screen gesture=tap outcome=mouse_click".to_owned());
                 if self.haptics {
                     haptics::tap();
                 }
+            }
+            Some(Finger::Phone { steps, .. }) if steps > 0 => {
+                self.record_phone_touch_diagnostic(format!("phone_screen gesture=swipe_end steps={steps}"));
+            }
+            Some(Finger::Phone { .. }) => {
+                self.record_phone_touch_diagnostic("phone_screen gesture=drag_without_navigation".to_owned());
+            }
+            Some(Finger::Button { key: Key::Phone(index), .. }) => {
+                self.record_phone_touch_diagnostic(format!(
+                    "phone_virtual_key key={} phase=up",
+                    Self::phone_key_name(index)
+                ));
             }
             Some(Finger::Button { key: Key::Action(a), origin, last, .. })
                 if unsafe { Self::is_aim(&*a) } && origin.distance(last) <= TAP_SLOP * self.scale =>
@@ -2267,6 +2332,13 @@ impl Touch {
         match self.fingers.remove(&id) {
             Some(Finger::Pinch(_) | Finger::Mouse { drag: Some(Drag::Two), .. }) => self.two = None,
             Some(Finger::Mouse { drag: Some(Drag::Hold), .. }) => self.click = None,
+            Some(Finger::Phone { steps, .. }) => self.record_phone_touch_diagnostic(format!(
+                "phone_screen gesture=cancel steps={steps}"
+            )),
+            Some(Finger::Button { key: Key::Phone(index), .. }) => self.record_phone_touch_diagnostic(format!(
+                "phone_virtual_key key={} phase=cancel",
+                Self::phone_key_name(index)
+            )),
             _ => {}
         }
     }

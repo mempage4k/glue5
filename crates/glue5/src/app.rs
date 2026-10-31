@@ -1207,12 +1207,14 @@ impl App {
                     #[cfg(target_os = "android")]
                     {
                         let touch_events = self.touch.diagnostics();
+                        let phone_touch_events = self.touch.phone_touch_diagnostics();
                         if let Err(error) = crate::imports::copy_diagnostics(
                             &self.user_dir,
                             self.source,
                             self.game_dir.as_deref(),
                             &self.settings,
                             &touch_events,
+                            &phone_touch_events,
                         ) {
                             self.ui.note(format!("Could not copy import diagnostics: {error:#}"));
                         }
@@ -1675,12 +1677,14 @@ impl App {
         #[cfg(target_os = "android")]
         {
             let touch_events = self.touch.diagnostics();
+            let phone_touch_events = self.touch.phone_touch_diagnostics();
             if let Err(error) = crate::imports::copy_diagnostics(
                 &self.user_dir,
                 self.source,
                 self.game_dir.as_deref(),
                 &self.settings,
                 &touch_events,
+                &phone_touch_events,
             ) {
                 log::error!("cannot save/copy support report after game failure: {error:#}");
             }

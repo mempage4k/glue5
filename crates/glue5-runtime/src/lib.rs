@@ -58,10 +58,20 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 
 pub use glue5_game::GAME_BUILD;
+
+/// One monotonic timeline for the support traces from touch, input and Scaleform.
+/// It starts at the first diagnostic event and never records wall-clock time.
+static DIAGNOSTICS_CLOCK: OnceLock<Instant> = OnceLock::new();
+
+/// Milliseconds on the common monotonic timeline used by the support traces.
+pub fn diagnostics_elapsed_ms() -> u128 {
+    DIAGNOSTICS_CLOCK.get_or_init(Instant::now).elapsed().as_millis()
+}
 
 /// The CPU cores the process may use, asked once: on Linux and Android the
 /// standard library reads the cgroup quotas each time, which Android's

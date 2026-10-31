@@ -68,9 +68,8 @@
 
 use std::cell::Cell;
 use std::collections::VecDeque;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::time::Instant;
 
 use glue5_game::{Env, exports, orig};
 
@@ -528,15 +527,13 @@ static PHONE_MOVIE: AtomicU32 = AtomicU32::new(u32::MAX);
 /// wrong app can be told from what the script sent. Bounded; method names
 /// and numbers only, nothing the player typed or saw.
 static PHONE_MOVIE_TRACE: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
-static PHONE_MOVIE_TRACE_START: OnceLock<Instant> = OnceLock::new();
 
 fn trace_phone_movie(line: String) {
-    let start = PHONE_MOVIE_TRACE_START.get_or_init(Instant::now);
     let mut trace = PHONE_MOVIE_TRACE.lock().unwrap();
     if trace.len() == 64 {
         trace.pop_front();
     }
-    trace.push_back(format!("+{}ms {line}", start.elapsed().as_millis()));
+    trace.push_back(format!("+{}ms {line}", crate::diagnostics_elapsed_ms()));
 }
 
 /// The phone movie's recent input and view methods, oldest first.

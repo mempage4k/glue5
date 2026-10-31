@@ -8,7 +8,7 @@
 
 use std::cell::Cell;
 use std::collections::VecDeque;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
@@ -330,7 +330,6 @@ static PHONE_TOUCHSCREEN: AtomicBool = AtomicBool::new(true);
 /// Bounded; no coordinates or contents.
 static PHONE_TRACE: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static PHONE_TRACE_LAST: Mutex<Option<(bool, bool, bool, bool, bool, bool, i32)>> = Mutex::new(None);
-static PHONE_TRACE_START: OnceLock<Instant> = OnceLock::new();
 
 fn trace_phone(created: bool, camera: bool, going: bool, raw: bool, published: bool, mouse: bool, z: f32) {
     // The phone's depth in half-steps: steady while it shows, so a phone
@@ -343,14 +342,13 @@ fn trace_phone(created: bool, camera: bool, going: bool, raw: bool, published: b
     }
     *last = Some(state);
     drop(last);
-    let start = PHONE_TRACE_START.get_or_init(Instant::now);
     let mut trace = PHONE_TRACE.lock().unwrap();
     if trace.len() == 64 {
         trace.pop_front();
     }
     trace.push_back(format!(
         "+{}ms phone created={created} camera={camera} going={going} raw_out={raw} out={published} device={} pos_z={z:.1}",
-        start.elapsed().as_millis(),
+        crate::diagnostics_elapsed_ms(),
         if mouse { "keyboard/mouse" } else { "pad" },
     ));
 }
