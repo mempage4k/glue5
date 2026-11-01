@@ -31,6 +31,7 @@ mod mods;
 mod menu;
 mod pages;
 mod perf;
+mod popup;
 mod scenes;
 mod servers;
 mod shell;
@@ -324,6 +325,8 @@ pub struct Ui {
     scale_edit: Option<f32>,
     /// A mode was chosen: this frame shows that it starts, then it does.
     starting: Option<Mode>,
+    /// A warning over the page, waiting for its answer.
+    popup: Option<popup::Open>,
     /// GTA Online's card on the start page is open (its lobby and name).
     online_open: bool,
     /// The settings button as last drawn (centre, radius), in points.
@@ -405,6 +408,7 @@ impl Ui {
             note: None,
             scale_edit: None,
             starting: None,
+            popup: None,
             online_open: false,
             gear: None,
             repaint_at: Some(Instant::now()),
@@ -521,6 +525,13 @@ impl Ui {
     /// credits back to where they were opened; on the start page, GTA
     /// Online's card closes.
     pub fn back(&mut self) {
+        // A warning on show takes the way back first: dropping it is its
+        // cancel, and the page under it stays where it was.
+        if self.popup.take().is_some() {
+            sfx::want(Sound::Back);
+            self.repaint();
+            return;
+        }
         let was = self.page;
         match self.page {
             Some(Page::Start) if self.online_open => {
@@ -790,6 +801,22 @@ impl Ui {
 
     pub fn nav(&mut self, nav: Nav) {
         self.gamepad_prompts = true;
+        // A warning on show takes the pad for itself: its keys are taken
+        // out of the frame's input before the page under it can see them,
+        // so they must arrive as themselves, focus or no focus.
+        if self.popup.is_some() {
+            let key = match nav {
+                Nav::Up => egui::Key::ArrowUp,
+                Nav::Down => egui::Key::ArrowDown,
+                Nav::Left => egui::Key::ArrowLeft,
+                Nav::Right => egui::Key::ArrowRight,
+                Nav::Activate => egui::Key::Enter,
+                Nav::Back => return self.back(),
+            };
+            self.key(key, true, Default::default());
+            self.key(key, false, Default::default());
+            return;
+        }
         if self.page == Some(Page::Start) && !self.ctx.egui_wants_keyboard_input() {
             match nav {
                 Nav::Left | Nav::Right => {
@@ -888,6 +915,12 @@ impl Ui {
         // Play was chosen at the last frame: this one shows that the game
         // starts, then it does.
         let starting = std::mem::take(&mut self.starting);
+        // A warning on show keeps the keys it answers to itself.
+        let popup_keys = if self.popup.is_some() {
+            popup::take_keys(&mut self.events)
+        } else {
+            popup::Keys::default()
+        };
         let ppp = pixels_per_point(window);
         let screen = Rect::from_min_size(Pos2::ZERO, screen_size(window));
         let safe = safe_rect(window);
@@ -997,6 +1030,28 @@ impl Ui {
         // The shell already displays the build label in its header.
         if self.page.is_none() {
             draw_build_identity(&ctx, safe);
+        }
+        // A page that had to ask first: its warning opens over what it
+        // drew, and its answer is the action the page stood for.
+        if let Some(request) = popup::take() {
+            self.popup = Some(popup::Open::new(request));
+            sfx::want(Sound::Open);
+        }
+        let answered = self.popup.as_mut().map(|open| popup::show(&ctx, open, content, popup_keys));
+        match answered {
+            None | Some(popup::Outcome::Open) => {}
+            Some(popup::Outcome::Confirmed(confirm)) => {
+                self.popup = None;
+                sfx::want(Sound::Confirm);
+                actions.push(match confirm {
+                    popup::Confirm::ClearCopy => Action::ClearCopy,
+                    popup::Confirm::ResetGraphics => Action::ResetGraphics,
+                });
+            }
+            Some(popup::Outcome::Cancelled) => {
+                self.popup = None;
+                sfx::want(Sound::Back);
+            }
         }
         // The selection moved to another control (a d-pad, an arrow, a stick,
         // or the pointer over another line): the menu ticks, as a console's
