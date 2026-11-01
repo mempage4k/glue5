@@ -667,7 +667,7 @@ Drive desde o lote das 02:30 (05:30Z).
 
 | Item | Estado | O que falta / onde destrava |
 |---|---|---|
-| 22 `.ysc.full` | Descriptografados e validados, **não descompilados** | Rodar o descompilador (PC do usuário) — §7.3/§11.1 |
+| 22 `.ysc.full` | Descriptografados e validados; **descompilados na rodada 2** (22/22 ✓) | — (§13.2) |
 | `SCRIPT.rpf` (base, no lote) | Remontado, **não aberto** | OpenIV no PC; resolve a proveniência do `script_rel` (§11.2) |
 | `RESIDENT.rpf` | Header sondado; TOC criptografada | OpenIV/CodeWalker no PC (só se o áudio resident virar pauta) |
 | 459 `.gfx` sem ActionScript | Inventariados (nome/bytes/hash); só 8 filmes têm `.as` | Exportar com FFDec sob demanda, por tela (§11.3) |
@@ -682,3 +682,155 @@ repositório entre turnos, o material bruto **não está em disco agora**
 O conhecimento extraído está todo neste documento, em
 `gta5-visual-parity.md` e nos CSVs de `docs/gta5-referencia/`; o material
 bruto volta em minutos pela receita do §10 quando a próxima etapa pedir.
+
+---
+
+## 13. Rodada 2 (2026-11-01, tarde) — `ENTREGAS-GLUE5-YSC-02` recebida e verificada
+
+Resposta ao prompt `docs/prompt-chatgpt-2026-11-01-ysc-full.md`. Pacote no
+Drive: `glue5/PACOTES ARENA/01-11 14:55` (pasta
+`16q3ULHxo_7hTeKs3c2tYQSVJ324RsDaI`), enviado 2026-11-01T17:55Z, 3
+arquivos: `GLUE5-ARENA-YSC-02-2026-11-01_14-22.zip` (id
+`1qFz1nrBcIwyyIPmzSHA1JYD7SeqS3OyN`, 4.041.567 B, SHA-256
+`EBC1AA55442733EA40552C71E48CE9EB998E706CBE41735B037A5E4A078AF13D`),
+`INDICE-PACOTES-02.csv` (`1VhHZExmmGfim5nljFeSZzktP8IHYCqx7`) e
+`LEIA-ME-ARENA-02.md` (`1eruTk9Ey8Vl8gHa7BBDqNCU9rtnVyrs9`). A pasta no
+Drive ficou `01-11 14:55` (não o nome sugerido no LEIA-ME) — irrelevante.
+**Esta seção atualiza §7.1, §7.3, §11.1–11.3 e a tabela do §12.**
+
+### 13.1 Verificação independente (nossa)
+
+- SHA-256 do ZIP confere com o índice; `testzip` íntegro; **1.631
+  arquivos / 24.253.742 B** extraídos (bate com o LEIA-ME). Inventário
+  próprio com hashes: `docs/gta5-referencia/INVENTARIO-ENTREGA-02.csv`.
+  (Os caminhos do ZIP usam `\`; no Linux os nomes vêm achatados com
+  barras invertidas literais — só cosmético.)
+- `DECOMPILATION-INDEX-02.csv`: recalculamos os 22 hashes de saída
+  (todos OK) e os 22 `input_sha256` conferem com os `.ysc.full` da
+  rodada 1 (CSVs deste repositório). Os 3 regenerados
+  (`cellphone_controller`, `cellphone_flashhand`, `ingamehud`) são
+  **byte-idênticos** aos `.c` da rodada 1 (`C8512FCE…`, `14236092…`,
+  `E88E3620…`).
+- `INDEX-FFDEC-02.csv`: 24 filmes, **817 `.as`** (contagem por filme
+  confere arquivo a arquivo); as 24 cópias `.gfx` de entrada
+  (`_input-base/`) são byte-idênticas às da rodada 1 em
+  `02-scaleform_generic` (build base), por hash.
+- Logs: individuais por script/filme com comando/stdout/stderr/exit-code;
+  o único vazio é um artefato de diagnóstico da invocação antiga
+  (`TESTE-INVOCACAO-POWERSHELL-ANTIGA.log`), não log de script.
+- Spot-checks de estilo conferem nas fontes: constantes de largura do
+  `HUD_SUBTITLE_TEXT.as`, `outline=14`/`Colourise` do `HUD_CASH.as`,
+  SoundId literais em `pausemenu_multiplayer.c` (ver §13.4),
+  `SHOW_WARNING_MESSAGE` em `pausemenu_sp_repeat.c` (linha 936).
+
+### 13.2 Fase 1 — 22/22 descompilados
+
+Descompilador: mesma build (commit `2958d816…`, CLI 1.0.0.0,
+net10.0-windows; .NET SDK 10.0.103). Diagnóstico da falha silenciosa da
+rodada 1: **não** faltava runtime, `.ysc.full` é aceito diretamente,
+diretório novo escreve normalmente; a execução **um processo por
+arquivo** (wrapper `cmd` com stdout/stderr/exit-code separados)
+funcionou nos 22. A causa-raiz da rodada em massa segue **não provada**
+(logs de 0 B = ausência de evidência, não erro registrado) — o manifesto
+registra as hipóteses testadas. Maiores saídas: `appinternet.c`
+10.995.899 B / 448.251 linhas; `pausemenu_multiplayer.c` 3.008.141 B /
+108.385; `ingamehud.c` 2.517.123 B / 108.636 (contagem deles; a nossa
+por LF difere, como já anotado no §7.3). Os `.ysc.full` e os 5 `.ysc` de
+teste da Fase 2 ficaram fora do pacote (só no PC), como combinado.
+
+### 13.3 Fase 2 — proveniência resolvida no nível que importa
+
+- O `SCRIPT.rpf` auditado (SHA `40612465…`) é um arquivo de **áudio**:
+  522 entradas, 521 `.awc`, **zero `.ysc`** (ex.: `hud_awards.awc`,
+  `mp_wasted.awc` — potencialmente útil ao trabalho de SFX). Ele **não**
+  é a fonte dos scripts; nossa hipótese implícita de "SCRIPT.rpf base de
+  scripts" estava errada.
+- O contêiner dos scripts é `script_rel.rpf` (SHA `37390D2B…`, confere
+  com a nossa reconstrução), caminho interno
+  `x64/levels/gta5/script/script_rel.rpf`, 1.029 `.ysc`, zero `.awc`.
+- Nos 5 scripts de teste (ingamehud, cellphone_controller,
+  appinternet, pausemenu_map, appsettings), os SHA-256 **brutos** da
+  extração desta rodada diferem dos de `script_rel-EXTRAIDO` (tamanhos
+  iguais), mas os **corpos inflados são idênticos** aos payloads dos
+  `.ysc.full` (`BodiesIdentical=True` nos 5; o corpo = `.full` menos 16
+  B de header). Ou seja: a serialização/criptografia do contêiner YSC
+  varia entre cópias; o código é o mesmo. 3/5 brutos coincidem também
+  com uma árvore local rotulada update; o `ingamehud` bruto de
+  `script_rel-EXTRAIDO` é o da exceção update; `pausemenu_map` só foi
+  localizado na extração base consultada.
+- **Conclusão:** proveniência física dos bytes brutos de
+  `script_rel-EXTRAIDO` = **mistura/indeterminado** (nem "todos base",
+  nem "todos update"); para análise de UI/lógica, o corpo de código é o
+  mesmo e está validado. Origem (declarada pelo usuário): extração da
+  instalação local do GTA V para PC dele, com OpenIV; a conferência
+  desta rodada foi feita sobre as cópias em disco (leitura RPF via RAGE
+  CLI), sem abrir a interface do OpenIV — caminhos/hashes são medidos,
+  a ferramenta original é relato.
+
+### 13.4 Fase 3 — acréscimos do `RELATORIO-ESTILO-HUD-02.md` (amostragem conferida)
+
+- **Legendas** (`HUD_SUBTITLE_TEXT.as`): largura 0,415×960 (std),
+  0,5328125×1280 (HD), 0,68359375 (cutscene); `pointSize 20` (25 com
+  `NEEDS_BIGGER_HELP_AND_SUBTITLES`), leading 3, centrado, wordWrap,
+  `y = 120 − altura`; campo gêmeo de glow; cor/edge/dropshadow **sem
+  evidência** numérica no AS. Limpeza da legenda agenda remoção em 5 s
+  (não é duração de exibição).
+- **Texto de ajuda** (`HUD_HELP_TEXT.as`): 14,4 pt (20 no modo grande),
+  leading 2,65; duração = base + palavras × 333 ms (+30%), override se
+  positivo; margens do quadro 7/5/4/12.
+- **Área/rua/veículo**: classe agrupada `HUD_AREA_VEHICLE_STREET_NAME`
+  (a que o NEW_HUD roteia): 4.000 ms na tela, fade 100 ms, autosize
+  shrink, `rightMargin=2`; filmes INDIVIDUAIS usam 2.500 ms (distrito:
+  espera de 1,5 s). Fonte/escala/cor ficam no timeline (sem evidência).
+- **Dinheiro** (`HUD_CASH.as`): cor `HUD_COLOUR_WHITE`; variação
+  `+$` = `Colourise(102,152,104,100)`, `-$` = `(194,80,80,100)`;
+  `cashStrokeTF.outline = 14`, autosize à direita, offsets −3/−7.
+- **Estrelas** (`HUD_WANTED_STARS.as`): flash finito 0,5 s com <6
+  ciclos (branco × `HUD_COLOUR_MID_GREY_MP`); contínuo com período
+  0,2–1,5 s (Quad.easeIn); tempo de evasão default 50.000 ms.
+- **Mensagens grandes** (`MP_BIG_MESSAGE_FREEMODE`): X=640; texto
+  central Y=324, não-central Y=116; fundo Y=352 com altura conteúdo+60;
+  corpo **18 pt**, gamertag `$Font2_cond` **21 pt** voltando a `$Font2`
+  18 pt, rank >99 em 24 pt; `BIG_TEXT_OUTLINE_STRENGTH = 9`; títulos
+  fora do intervalo encolhem ×0,85; durações vêm de SET_* (defaults 0 na
+  classe). **Mission passed**: 5.000 ms + fade 100 ms herdados.
+- **Feed**: fluxo ticker parametrizado (`_THEFEED_SHOW_MESSAGE` etc.);
+  o flash/count=1 e as esperas de 1.000/10.000 ms são do fluxo de
+  salvamento; **sem** duração/tipografia universal demonstrada.
+- **Sons de frontend (literais)**: em `pausemenu_multiplayer.c`, set
+  `HUD_FRONTEND_DEFAULT_SOUNDSET`: **`NAV_UP_DOWN`, `NAV_LEFT_RIGHT`,
+  `SELECT`, `CANCEL`, `BACK`**; em `pausemenu_map.c` só `SELECT`;
+  `pausemenu_sp_repeat.c`/`pausemenu.c`/`pausemenu_example.c` sem
+  `PLAY_SOUND_FRONTEND`. Útil direto para `docs/menu-sfx.md`/SFX do shell.
+- **Pause/celular**: métodos e argumentos observados por script
+  (`SHOW_WARNING_MESSAGE`, `SET_COLUMN_TITLE`, `SET_DATA_SLOT`,
+  `SHOW_COLUMN` etc.) e labels `PM_*`/`CELL_*` catalogados no relatório.
+- Ressalvas do próprio relatório (corretas): escala nativa de
+  `SET_TEXT_SCALE` (ex.: 0,35/0,4) **não** é pt de Flash; tipografia de
+  timeline continua sem evidência por AS; imports externos ignorados.
+
+### 13.5 Fase 4 — 24/24 filmes exportados (13 pedidos + 11 complementares)
+
+817 `.as` + textos, exit code 0 nos 24, logs individuais; o mesmo aviso
+de import de SWF externo em 24/24 (não invalida as classes locais).
+Todos build base. Além dos 13 pedidos, vieram: família `hud_*_name`,
+`hud_cash`/`hud_cash_change`/`hud_mp_cash`/`hud_mp_message`,
+`mission_complete`, `mission_target_complete`,
+`mp_big_message_freemode`. Maiores: `hud` (87 `.as`),
+`mp_big_message_freemode` (69), celulares (62–63).
+
+### 13.6 Estado, reuso e pendências que restam
+
+Entrega guardada nesta sessão em `gdrive-ref/entrega-02/` (fora do repo;
+some com o sandbox). Para rebaixar: IDs acima + conferir contra
+`docs/gta5-referencia/INDICE-PACOTES-02.csv` e
+`INVENTARIO-ENTREGA-02.csv`. Os `.c`/`.as` **não** entram no git (regra
+da casa) — no repo ficam este registro e os CSVs de metadados.
+
+Com isso, fecham-se os itens 1–3 do §11 (resta: decidir a fonte §11.4,
+aplicar os deltas §11.5 e compilar o pop-up §11.6). Pendências menores
+anotadas: a variante *update* dos filmes da Fase 4 não foi exportada
+(para hooks no jogo real, comparar com o lote 1); a causa-raiz da falha
+em massa da rodada 1 ficou sem prova; tipografia de timeline
+(cores/escalas de vários componentes HUD) continua exigindo leitura dos
+filmes, não do AS.
