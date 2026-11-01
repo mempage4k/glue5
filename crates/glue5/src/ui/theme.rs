@@ -28,7 +28,7 @@ pub(super) mod palette {
     pub(in crate::ui) const TEXT_HI: Color32 = Color32::from_rgb(240, 240, 240);
     /// The pause menu's block: pure black at 186/255 (73%), measured in the
     /// game's movies — rows, tabs and the panel itself.
-    pub(in crate::ui) const BLOCK: Color32 = Color32::from_rgba_unmultiplied(0, 0, 0, 186);
+    pub(in crate::ui) const BLOCK: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 186);
     pub(in crate::ui) const TEXT_MID: Color32 = Color32::from_rgb(185, 183, 177);
     pub(in crate::ui) const TEXT_LOW: Color32 = Color32::from_rgb(130, 129, 127);
     /// The one accent, used for emphasis only: the active tab's underline, a
