@@ -1,6 +1,7 @@
 //! The shell's rows and controls: one line per setting, its label at the
-//! left, its value at the right, a 1 px rule between; the selected line goes
-//! solid light with dark text, as the pause menu's does.
+//! left, its value at the right, each line a translucent black block with
+//! ~2 px of air around it; the selected line goes solid light with dark
+//! text, as the pause menu's does.
 //!
 //! Older pages still call the older helpers (`setting`, `segmented`, ...),
 //! which now draw with the same flat surfaces, square corners and 1 px rules.
@@ -55,10 +56,11 @@ pub(super) fn row(ui: &mut Ui, label: &str, help: &str, add: impl FnOnce(&mut Ui
         lit = last == Some(id) && ui.ctx().memory(|m| m.focused()).is_some();
     }
 
-    let background = if lit { palette::TEXT_HI } else if hovered.hovered() { palette::INK_800 } else { Color32::TRANSPARENT };
-    if background != Color32::TRANSPARENT {
-        ui.painter().rect_filled(rect, 0, background);
-    }
+    let background = if lit { palette::TEXT_HI } else if hovered.hovered() { palette::INK_800 } else { palette::BLOCK };
+    // The block leaves ~1 px of air top and bottom, so stacked rows read as
+    // the pause menu's separate blocks (its 27 px row, 25 px highlight).
+    // The interact rect keeps the full height: only the paint shrinks.
+    ui.painter().rect_filled(rect.shrink2(vec2(0.0, 1.0 * scale)), 0, background);
 
     let inset = 12.0 * scale;
     let control_width = (rect.width() * 0.46).max(96.0 * scale);
@@ -92,12 +94,6 @@ pub(super) fn row(ui: &mut Ui, label: &str, help: &str, add: impl FnOnce(&mut Ui
     if lit_now && !lit {
         // The selection moved onto this line: the tick the pause menu makes.
         sfx::want(Sound::Focus);
-    }
-    if !lit {
-        ui.painter().line_segment(
-            [pos2(rect.left(), rect.bottom() - 0.5), pos2(rect.right(), rect.bottom() - 0.5)],
-            Stroke::new(1.0, palette::SEPARATOR),
-        );
     }
     hovered | response
 }

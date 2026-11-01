@@ -94,23 +94,14 @@ pub(super) fn frame(ctx: &Context, title: &str, add: impl FnOnce(&mut Ui)) -> bo
             // Nothing the pages draw leaves the screen.
             ui.set_clip_rect(area);
             let painter = ui.painter().clone();
-            // Dark translucent acrylic: the image beneath has already been
-            // blurred inside this same rectangle. Outside stays unobscured.
-            // Preserve the full output clip, including safe-area insets, so
-            // the panel reaches the phone's physical edges.
+            // Translucent black — the pause menu's block colour (0, 0, 0 at
+            // 186/255, measured in the game's movies): the scene beneath has
+            // been lightly softened inside this same rectangle and stays
+            // sharp outside it. Preserve the full output clip, including
+            // safe-area insets, so the panel reaches the phone's edges.
             let mut backdrop = ctx.layer_painter(ui.layer_id());
             backdrop.set_clip_rect(viewport);
-            backdrop.rect_filled(full_panel, 0, Color32::from_rgba_unmultiplied(13, 15, 19, 150));
-            // Acrylic cues: a restrained top reflection and a soft accent on
-            // the existing edge (the panel geometry itself stays untouched).
-            backdrop.line_segment(
-                [full_panel.left_top(), full_panel.right_top()],
-                Stroke::new(1.0, Color32::from_rgba_unmultiplied(242, 242, 240, 18)),
-            );
-            backdrop.line_segment(
-                [full_panel.right_top(), full_panel.right_bottom()],
-                Stroke::new(1.0, Color32::from_rgba_unmultiplied(168, 216, 52, 52)),
-            );
+            backdrop.rect_filled(full_panel, 0, palette::BLOCK);
             let panel = Rect::from_min_size(area.min, vec2(panel_w, area.height()));
 
             let header_h = metrics::HEADER * scale;
@@ -148,10 +139,15 @@ pub(super) fn frame(ctx: &Context, title: &str, add: impl FnOnce(&mut Ui)) -> bo
                 let here = page == Some(*target);
                 let response = ui.interact(rect, Id::new(("shell-tab", name)), Sense::click());
                 response.widget_info(|| WidgetInfo::selected(WidgetType::Button, true, here, *name));
+                // Tabs are blocks too, with the pause menu's ~2 px of air
+                // between them; the current one inverts to white.
+                let tab_block = rect.shrink2(vec2(1.0 * scale, 0.0));
                 if here {
-                    painter.rect_filled(rect, 0, palette::TEXT_HI);
+                    painter.rect_filled(tab_block, 0, palette::TEXT_HI);
                 } else if response.hovered() || response.has_focus() {
-                    painter.rect_filled(rect, 0, palette::INK_800);
+                    painter.rect_filled(tab_block, 0, palette::INK_800);
+                } else {
+                    painter.rect_filled(tab_block, 0, palette::BLOCK);
                 }
                 painter.text(
                     rect.center(),
@@ -265,7 +261,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn acrylic_reaches_viewport_edges_even_with_safe_area_insets() {
+    fn panel_reaches_viewport_edges_even_with_safe_area_insets() {
         use egui::{RawInput, SafeAreaInsets, Shape};
 
         let ctx = Context::default();
@@ -295,7 +291,7 @@ mod tests {
             let acrylic = output.shapes.iter().find(|shape| match &shape.shape {
                 Shape::Rect(rect) => {
                     rect.rect == panel
-                        && rect.fill == Color32::from_rgba_unmultiplied(13, 15, 19, 150)
+                        && rect.fill == palette::BLOCK
                 }
                 _ => false,
             });

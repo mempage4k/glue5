@@ -24,7 +24,11 @@ pub(super) mod palette {
     pub(in crate::ui) const LINE: Color32 = Color32::from_rgb(44, 47, 53);
     /// The finer rules between rows.
     pub(in crate::ui) const SEPARATOR: Color32 = Color32::from_rgb(34, 36, 42);
-    pub(in crate::ui) const TEXT_HI: Color32 = Color32::from_rgb(242, 242, 240);
+    /// The movies' white: RGB 240, not 255 — text and the focused block.
+    pub(in crate::ui) const TEXT_HI: Color32 = Color32::from_rgb(240, 240, 240);
+    /// The pause menu's block: pure black at 186/255 (73%), measured in the
+    /// game's movies — rows, tabs and the panel itself.
+    pub(in crate::ui) const BLOCK: Color32 = Color32::from_rgba_unmultiplied(0, 0, 0, 186);
     pub(in crate::ui) const TEXT_MID: Color32 = Color32::from_rgb(185, 183, 177);
     pub(in crate::ui) const TEXT_LOW: Color32 = Color32::from_rgb(130, 129, 127);
     /// The one accent, used for emphasis only: the active tab's underline, a
@@ -113,6 +117,29 @@ pub(super) fn heading(text: &str, size: f32) -> RichText {
     RichText::new(text).font(FontId::new(size, fonts::heavy())).color(palette::TEXT_HI)
 }
 
+/// One optional player-supplied face, read from the fonts folder. True when
+/// the file was there and TTF/OTF-shaped; anything else is ignored with a
+/// warning instead of being handed to the layout engine.
+fn load_player_font(fonts: &mut FontDefinitions, dir: &std::path::Path, file: &str, name: &str) -> bool {
+    let path = dir.join(file);
+    let Ok(bytes) = std::fs::read(&path) else { return false };
+    if !looks_like_a_font(&bytes) {
+        log::warn!("fonts: {} is not a TTF/OTF; ignoring it", path.display());
+        return false;
+    }
+    log::info!("fonts: {} from {}", file, path.display());
+    fonts.font_data.insert(name.into(), FontData::from_owned(bytes).into());
+    true
+}
+
+/// The sfnt first words: TrueType (0x00010000), `true`, or CFF `OTTO`.
+/// The layout engine trusts the bytes after this, so a renamed file (a
+/// WOFF, say) stops here rather than at the first glyph.
+fn looks_like_a_font(bytes: &[u8]) -> bool {
+    const MAX: usize = 8 * 1024 * 1024;
+    bytes.len() >= 4 && bytes.len() <= MAX && matches!(&bytes[..4], [0, 1, 0, 0] | b"true" | b"OTTO")
+}
+
 pub(super) fn install(ctx: &Context) {
     ctx.set_theme(Theme::Dark);
     let mut fonts = FontDefinitions::default();
@@ -123,11 +150,29 @@ pub(super) fn install(ctx: &Context) {
     ] {
         fonts.font_data.insert(name.into(), FontData::from_static(bytes).into());
     }
-    fonts.families.get_mut(&FontFamily::Proportional).unwrap().insert(0, "regular".into());
+    // A font the player supplies (the game's own cut, from their
+    // installation's neighbourhood) goes first in every chain; Manrope
+    // stays behind it for the glyphs the supplied cut lacks (the game's
+    // export has no ★ and no U+2212). Nothing of the game's is bundled.
+    let (mut player, mut player_condensed) = (false, false);
+    if let Ok(user) = crate::paths::user_dir() {
+        let dir = crate::paths::fonts_dir(&user);
+        player = load_player_font(&mut fonts, &dir, "font.ttf", "player");
+        player_condensed = load_player_font(&mut fonts, &dir, "font-condensed.ttf", "player-condensed");
+    }
+    let first: &str = if player { "player" } else { "regular" };
+    fonts.families.get_mut(&FontFamily::Proportional).unwrap().insert(0, first.into());
     // Each named family starts at a font file that exists: a chain whose first
     // name has no data is a panic when a glyph is laid out. Manrope has no
     // condensed cut, so "condensed" (the old Barlow Condensed) is the bold one.
     for (family, face) in [("strong", "strong"), ("heavy", "heavy"), ("condensed", "heavy")] {
+        // The game's faces are a single weight: with them, emphasis is size
+        // and the condensed cut, exactly as in the original menus.
+        let face = match family {
+            "condensed" if player_condensed => "player-condensed",
+            _ if player => "player",
+            _ => face,
+        };
         let mut chain = vec![face.into()];
         chain.extend(fonts.families[&FontFamily::Proportional].clone());
         fonts.families.insert(FontFamily::Name(family.into()), chain);
@@ -161,7 +206,7 @@ pub(super) fn install(ctx: &Context) {
             w.bg_stroke = Stroke::NONE;
             w.fg_stroke = Stroke::new(1.0, palette::TEXT_HI);
         }
-        s.visuals.widgets.hovered.bg_fill = Color32::from_rgba_unmultiplied(242, 242, 240, 20);
+        s.visuals.widgets.hovered.bg_fill = Color32::from_rgba_unmultiplied(240, 240, 240, 20);
         s.visuals.widgets.active.bg_stroke = Stroke::new(1.0, palette::LIME);
         s.visuals.hyperlink_color = palette::TEXT_HI;
     });
