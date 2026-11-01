@@ -498,6 +498,15 @@ impl Ui {
     pub fn alert(&mut self, text: impl Into<String>) {
         let text = text.into();
         let now = Instant::now();
+        // The same line again (a repeated press, a state flapping): let it
+        // stay its full time from now, without blinking or ticking twice.
+        if let Some(hint) = &mut self.hint {
+            if hint.text == text {
+                hint.until = now + hint_for(&text);
+                self.repaint();
+                return;
+            }
+        }
         self.hint = Some(Hint { until: now + hint_for(&text), since: now, text });
         sfx::want(Sound::Notify);
         self.repaint();

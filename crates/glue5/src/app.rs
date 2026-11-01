@@ -830,7 +830,10 @@ impl App {
         }
         match &event {
             Event::Quit { .. } => return true,
-            Event::GamepadAdded { which, .. } => self.pads.added(*which),
+            Event::GamepadAdded { which, .. } => {
+                self.pads.added(*which);
+                self.ui.alert("Controller connected.");
+            }
             Event::GamepadRemoved { which, .. } => self.pads.removed(*which),
             // Back is navigation, not a switch to keyboard/gamepad controls;
             // keep Auto touch controls visible while it opens pause or goes back.
@@ -1222,16 +1225,22 @@ impl App {
                 }
                 Action::StartLogcatCapture => {
                     #[cfg(target_os = "android")]
-                    if let Err(error) = crate::imports::start_logcat_capture() {
-                        self.ui.note(format!("Could not start GLUE 5 process log capture via Shizuku: {error:#}"));
+                    match crate::imports::start_logcat_capture() {
+                        Ok(()) => self.ui.alert("Log capture started."),
+                        Err(error) => {
+                            self.ui.note(format!("Could not start GLUE 5 process log capture via Shizuku: {error:#}"))
+                        }
                     }
                     #[cfg(not(target_os = "android"))]
                     self.ui.note("GLUE 5 process log capture via Shizuku is available in the Android app.");
                 }
                 Action::StopLogcatCapture => {
                     #[cfg(target_os = "android")]
-                    if let Err(error) = crate::imports::stop_logcat_capture() {
-                        self.ui.note(format!("Could not finish GLUE 5 process log capture via Shizuku: {error:#}"));
+                    match crate::imports::stop_logcat_capture() {
+                        Ok(()) => self.ui.alert("Log capture finished."),
+                        Err(error) => {
+                            self.ui.note(format!("Could not finish GLUE 5 process log capture via Shizuku: {error:#}"))
+                        }
                     }
                     #[cfg(not(target_os = "android"))]
                     self.ui.note("GLUE 5 process log capture via Shizuku is available in the Android app.");
@@ -1239,11 +1248,11 @@ impl App {
                 Action::MarkDebugEvent(marker) => {
                     #[cfg(target_os = "android")]
                     match crate::imports::mark_debug_event(marker.tag()) {
-                        Ok(()) => self.ui.note(format!("Debug marker recorded: {}", marker.tag())),
+                        Ok(()) => self.ui.alert(format!("Debug marker recorded: {}", marker.tag())),
                         Err(error) => self.ui.note(format!("Could not mark GLUE 5 debug event: {error:#}")),
                     }
                     #[cfg(not(target_os = "android"))]
-                    self.ui.note(format!("GLUE 5 debug event: {}", marker.tag()));
+                    self.ui.alert(format!("GLUE 5 debug event: {}", marker.tag()));
                 }
                 Action::EditDebugTouchAreas => {
                     if self.game.is_some() {
@@ -1313,7 +1322,7 @@ impl App {
             }
             for result in crate::imports::install_ready(&self.user_dir, self.game_dir.as_deref()) {
                 match result {
-                    Ok(message) => self.ui.note(message),
+                    Ok(message) => self.ui.alert(message),
                     Err(error) => self.ui.note(format!("Import failed: {error:#}")),
                 }
             }
