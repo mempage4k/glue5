@@ -502,8 +502,9 @@ pub fn set_phone_touchscreen(on: bool) {
 
 /// The phone, while out on touchscreens, is brought nearer so it shows
 /// bigger (its place in the game's memory is rewritten each frame). A
-/// settings switch: off, the game's own place stands.
-static PHONE_ENLARGE: AtomicBool = AtomicBool::new(true);
+/// settings switch: off, the game's own place stands. Keep the runtime
+/// fallback off until the app explicitly applies the saved setting.
+static PHONE_ENLARGE: AtomicBool = AtomicBool::new(false);
 
 pub fn set_phone_enlarge(on: bool) {
     PHONE_ENLARGE.store(on, Ordering::Relaxed);

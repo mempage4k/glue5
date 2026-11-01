@@ -648,6 +648,9 @@ mod tests {
         assert_eq!(settings.touch_gyro_aim, GyroAim::Off);
         assert_eq!(settings.touch_tilt_steer, TiltSteer::Off);
         assert!(!settings.reduce_motion, "older settings default to animated backgrounds");
+        assert!(!settings.phone_enlarge, "phone enlargement defaults to the safe, game-owned position");
+        let opted_in: Settings = serde_json::from_str(r#"{"phone_enlarge":true}"#).unwrap();
+        assert!(opted_in.phone_enlarge, "the player can still explicitly enable enlargement");
     }
 
     #[test]

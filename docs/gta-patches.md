@@ -282,17 +282,29 @@ as generated decompiler labels, not original source names.
   `UP`, `RIGHT`, `DOWN`, or `LEFT`. `GET_CURRENT_SELECTION` asks the current
   interface for its selection. This directly corroborates the selection path
   in the public scripts for the supplied movie versions.
-- No pointer-coordinate or mouse-event identifiers were found in the AVM1
-  disassembly of the four main movies (`SET_MOUSE_INPUT`, `GET_MOUSE_POSITION`,
+- On 2026-10-31, I normalized only temporary copies of the Drive exports to
+  FWS headers and exported their AVM1/AS1-AS2 action blocks with
+  `swf-toolkit` 0.1.0; the source GFX files and the disassemblies remain outside
+  Git. In the four main movies, those blocks contain no pointer-coordinate or
+  mouse-event handlers/identifiers (`SET_MOUSE_INPUT`, `GET_MOUSE_POSITION`,
   `_xmouse`, `_ymouse`, `onPress`, `onRelease`, `onMouseDown`, `hitTest`, or
-  cursor methods). This is strong evidence against a built-in phone-film tap
-  API, though the same-build scripts and runtime traces are still needed to
-  close the loop.
+  cursor methods), and no named direct-selection setter such as
+  `SET_CURRENT_SELECTION`/`setCurrentSelection`.
+- The four roots expose `SET_INPUT_EVENT` for values 1–4 only, dispatching
+  `UP`/`RIGHT`/`DOWN`/`LEFT` to the current interface's `navigate`; their
+  `GET_CURRENT_SELECTION` method asks that interface for its existing
+  selection. The app classes keep `currentSelection` internally and update it
+  through their navigation/population code. There is no distinct direct-slot
+  setter in the inspected movie action code. A runtime property-write or
+  script-return bridge remains only a candidate and still needs a proven
+  coordinate-to-item hit-test and validation against the actual runtime.
 - `SF_BASE_CLASS_MOUSE` appears in the three normal story movies, but its
   disassembly use is only as the value 10 in the generic
   `GameInterface` external-interface type enumeration; it does not implement
   or identify a mouse-coordinate handler. Do not treat the string by itself as
-  evidence of touch support.
+  evidence of touch support. The absence of handlers in the phone movie does
+  not prove that no engine-side dispatch exists; it rules out relying on a
+  built-in phone-film hit-test in these exports.
 - The extra `cellphone_alert_popup.gfx` and `cellphone_cutscene.gfx` were also
   received and scanned. Keep them available for later call/popup/cutscene
   coverage, but they are separate from the four primary story-phone variants.
@@ -428,6 +440,54 @@ Confirmed from the supplied decompilation:
   selection path. Swiping through directional steps is navigation only and is
   not an acceptable final substitute.
 
+### Runtime bridge audit (2026-10-31)
+
+- `Touch::Finger::Phone` does retain the phone finger's screen point and
+  distinguishes a tap from a swipe. On lift, however, a tap becomes only the
+  generic `mouse_at` plus mouse-button click; `App` forwards that through the
+  game input block. No phone-specific tap/coordinate event is currently passed
+  to `glue5-runtime`, so there is no coordinate available at the selection
+  hook yet. A future one-shot event should remain internal and must not add
+  coordinates to the bounded support trace.
+- `script_assets::method_begin` identifies the phone movie via
+  `SET_TITLEBAR_TIME` and observes `GET_CURRENT_SELECTION` when the YSC begins
+  that movie call. The supplied `cellphone_flashhand` output shows that this is
+  asynchronous: `END_SCALEFORM_MOVIE_METHOD_RETURN_VALUE()` gives a handle and
+  a later `GET_SCALEFORM_MOVIE_METHOD_RETURN_VALUE_INT(handle)` consumes it.
+  The current hook list does not intercept those two native wrappers. The
+  narrowest result-side candidate is to capture the handle only when the phone
+  movie's pending method is `GET_CURRENT_SELECTION`, then override the integer
+  only when that handle is later read. Existing script-native hooks establish
+  the `Info` convention (`+0` result pointer, `+16` args); the exact wrapper
+  symbols still need confirmation against the target module/CI.
+- `prompts::scaleform_call_method` already hooks
+  `CScaleformMgr::CallMethodInternal` and sees movie/method/argument GFxValues,
+  but it currently only reads cursor and instructional-bar calls before
+  forwarding to the original. Its first `ret: u64` argument is not documented
+  by this repo as the phone getter's result; the exact target `game.wasm` is not
+  present in the workspace to verify that ABI. Do not write through it or
+  claim it intercepts the asynchronous selection result until that is proven.
+- The normal movies' list components provide useful geometry: five visible
+  rows, `defaultRowHeight = 48`, and `offsetY = 64`; the selected data index is
+  derived from the private `arrayStartPoint` plus the visible row. That scroll
+  offset is not exposed as a public movie method. However, the root receives
+  `DISPLAY_VIEW(viewID, currentID)`, `SET_DATA_SLOT(_EMPTY)`, and
+  `SET_INPUT_EVENT(direction)` through the existing method/parameter hooks.
+  Those calls appear sufficient to track the active view, populated row count,
+  initial selection, and navigation, then reproduce the list's scroll state;
+  `APP_ScrollingList.navigate` contains the needed update logic. This tracking
+  model has not been implemented or validated against a running movie.
+  Prologue uses a separate 256 × 192 stage, `PhoneUIComponent` geometry, and
+  `ContactList_Prologue`, so it needs its own view/state map rather than
+  assuming the normal phone layout.
+- Thus the runtime route is plausible but not yet safe: pass a one-shot phone
+  tap point from `Touch` to the runtime, hit-test against the tracked active
+  component (including scroll state), then alter only the pending phone
+  selection result while leaving the YSC's existing mapping/confirmation
+  intact. First verify the actual return-value boundary and validate view,
+  selection, and scroll reconstruction. No runtime patch or device test was
+  made in this audit.
+
 ### Android runtime evidence (build `eeb689c`, 2026-10-31)
 
 - The user ran the build with Phone touchscreen input on and Bigger phone off.
@@ -480,12 +540,13 @@ Confirmed from the supplied decompilation:
   failure. Renderer and GPU performance were not sampled, so this does
   not resolve or explain the earlier independent Vulkan device-loss report.
 - CI on `bf707cd`: `guard`, `test`, Android type-check, APK/page-alignment
-  build, and import handling passed. The Android import-test job failed only
-  in the menu/sound test step because the new coordinate-safety assertion also
-  matched `key=` as `y=`; the assertion is narrowed to coordinate fields in the
-  follow-up. The semantic trace itself emitted no coordinates. Do not merge
-  until the follow-up CI is green, and do not call direct icon selection fixed
-  from this report alone.
+  build, and import handling passed. The Android import-test job initially
+  failed only in the menu/sound test step because the new coordinate-safety
+  assertion also matched `key=` as `y=`; the assertion was narrowed to
+  coordinate fields in the follow-up. On the current PR #12 head `80aa79c`,
+  `gh pr checks 12` reports both `Android import tests` and `guard` passed.
+  This clears that CI follow-up only; it is not device validation and does not
+  mean direct icon selection is fixed.
 
 This report closes the need to obtain/decompile these two files again. The
 `bf707cd` trace supports that a GLUE screen tap reaches a `GET_CURRENT_SELECTION`
@@ -507,6 +568,10 @@ Durable lesson: a safe enlargement must happen at a single-writer boundary
 `SET_MOBILE_PHONE_POSITION`) or through a patched movie/script asset. Today's
 per-function engine hooks do not automatically cover script natives.
 `Settings::phone_enlarge` is therefore off by default and labelled experimental.
+The opt-in switch lives in **Settings › Controls**; the runtime fallback is also
+off until the app applies the saved preference, so missing/late settings cannot
+enlarge the phone accidentally. A previously saved explicit `true` is preserved
+until the player switches it off.
 
 ## General patch design checklist
 
