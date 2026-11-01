@@ -112,3 +112,22 @@ conversion is re-encoding, not tracing:
 - **Validation**: converter unit tests with synthetic DefineFont fixtures;
   on-PC diff of advances/coverage against the FFDec exports; on-device
   screenshot next to the real pause menu.
+
+## The bigger process this belongs to
+
+Framing from the user (2026-11-01): font extraction is **one harvest in a
+single acquisition process** over the player's installation. GLU-21's reader
+is the shared root; each consumer is then a pure converter plus a cache:
+menu sounds (`AWC → WAV`, GLU-20), fonts (`DefineFont → TTF`, GLU-24), and
+whatever the UI needs next. New harvests reuse the same seams — *entry
+bytes → pure converter → cache file the shell already reads* — instead of
+inventing per-asset plumbing, and the setup step runs them together, each
+cache keyed by its source entry's identity.
+
+Possibly under the same umbrella later: keeping the game's own UI sharp
+independently of 3D cost. Today the frame is drawn at
+`window × render_scale`, "so with a low scale the HUD is low-resolution
+too" (`crates/glue5-gpu/src/census.rs`). Splitting the Scaleform/HUD pass
+from the 3D resolution (registered as **GLU-25**) is a GPU/runtime-side
+change, but it serves the same end state as this pipeline: the player's
+game, presented at its best on their device.
