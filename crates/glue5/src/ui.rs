@@ -1037,7 +1037,7 @@ impl Ui {
             self.popup = Some(popup::Open::new(request));
             sfx::want(Sound::Open);
         }
-        let answered = self.popup.as_mut().map(|open| popup::show(&ctx, open, content, popup_keys));
+        let answered = self.popup.as_mut().map(|open| popup::show(&ctx, open, screen, content, popup_keys));
         match answered {
             None | Some(popup::Outcome::Open) => {}
             Some(popup::Outcome::Confirmed(confirm)) => {

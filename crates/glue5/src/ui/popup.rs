@@ -154,10 +154,13 @@ pub(super) enum Outcome {
     Cancelled,
 }
 
-/// Draws the warning over `area` (the page's whole rect) and answers for
-/// it. Dismissing it from outside (the Back button) is the frame's own:
-/// dropping the [`Open`] is a cancel.
-pub(super) fn show(ctx: &Context, open: &mut Open, area: Rect, keys: Keys) -> Outcome {
+/// Draws the warning over the whole screen and answers for it: the dim
+/// covers `screen` edge to edge (the shell's acrylic ignores the safe area
+/// the same way), while the box itself is sized — and kept — inside `safe`,
+/// the content rect the pages live in, so it never runs under a cut-out or
+/// the on-screen keyboard. Dismissing it from outside (the Back button) is
+/// the frame's own: dropping the [`Open`] is a cancel.
+pub(super) fn show(ctx: &Context, open: &mut Open, screen: Rect, safe: Rect, keys: Keys) -> Outcome {
     if keys.move_by != 0 {
         let next = moved(open.selected, keys.move_by, open.request.options().len());
         if next != open.selected {
@@ -168,21 +171,22 @@ pub(super) fn show(ctx: &Context, open: &mut Open, area: Rect, keys: Keys) -> Ou
     let mut outcome = Outcome::Open;
     Area::new(Id::new("popup"))
         .order(Order::Foreground)
-        .fixed_pos(area.min)
+        .fixed_pos(screen.min)
         .interactable(true)
         .show(ctx, |ui| {
-            ui.set_width(area.width());
-            ui.set_height(area.height());
-            ui.set_clip_rect(area);
+            ui.set_width(screen.width());
+            ui.set_height(screen.height());
+            ui.set_clip_rect(screen);
             let painter = ui.painter().clone();
-            // The page goes dark, and the press that lands anywhere on it
-            // lands on the warning, not on a line behind it.
-            painter.rect_filled(area, 0, Color32::from_black_alpha(165));
-            let _ = ui.interact(area, Id::new("popup-backdrop"), Sense::click());
+            // The whole screen goes dark, corners and cut-out alike, and
+            // the press that lands anywhere on it lands on the warning,
+            // not on a line behind it.
+            painter.rect_filled(screen, 0, Color32::from_black_alpha(165));
+            let _ = ui.interact(screen, Id::new("popup-backdrop"), Sense::click());
 
-            let scale = theme::layout_scale(area);
+            let scale = theme::layout_scale(safe);
             let pad = 16.0 * scale;
-            let width = (440.0 * scale).min((area.width() - 32.0 * scale).max(1.0));
+            let width = (440.0 * scale).min((safe.width() - 32.0 * scale).max(1.0));
             let body = painter.layout(
                 open.request.body.to_owned(),
                 FontId::new(12.5 * scale, fonts::regular()),
@@ -196,7 +200,15 @@ pub(super) fn show(ctx: &Context, open: &mut Open, area: Rect, keys: Keys) -> Ou
             let options_h = row_h * options.len() as f32 + gap * (options.len() - 1) as f32;
             let footer_h = 30.0 * scale;
             let height = header_h + pad + body.size().y + pad + options_h + pad * 0.75 + footer_h;
-            let box_rect = Rect::from_center_size(area.center(), vec2(width, height.min(area.height())));
+            let height = height.min(safe.height());
+            // Centred on the screen, then slid back inside the safe area
+            // if a cut-out or the keyboard would cover an edge of it.
+            let half = vec2(width, height) * 0.5;
+            let center = pos2(
+                screen.center().x.clamp(safe.left() + half.x, (safe.right() - half.x).max(safe.left() + half.x)),
+                screen.center().y.clamp(safe.top() + half.y, (safe.bottom() - half.y).max(safe.top() + half.y)),
+            );
+            let box_rect = Rect::from_center_size(center, vec2(width, height));
             painter.rect_filled(box_rect, 0, Color32::from_rgba_unmultiplied(10, 11, 14, 245));
             painter.rect_stroke(box_rect, 0, Stroke::new(1.0, palette::LINE), StrokeKind::Inside);
 
@@ -328,7 +340,7 @@ mod tests {
             let mut output = ctx.run_ui(
                 RawInput { screen_rect: Some(area), ..Default::default() },
                 |root| {
-                    outcome = show(root.ctx(), &mut open, area, keys);
+                    outcome = show(root.ctx(), &mut open, area, area, keys);
                     let _ = frame;
                 },
             );
@@ -345,7 +357,7 @@ mod tests {
         for keys in [Keys { move_by: -1, accept: false }, Keys::accept()] {
             let mut output = ctx.run_ui(
                 RawInput { screen_rect: Some(area), ..Default::default() },
-                |root| outcome = show(root.ctx(), &mut open, area, keys),
+                |root| outcome = show(root.ctx(), &mut open, area, area, keys),
             );
             output.textures_delta.clear();
         }
