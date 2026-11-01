@@ -21,6 +21,14 @@ The sounds live inside the game's audio archives (`.rpf` → `.awc`, the
 come out as containers that need extracting and trimming (OpenIV, CodeWalker or
 vgmstream, then any editor). `residents.rpf` extracted already has them.
 
+Every install must choose its game first — a folder, or one served over the
+network — so the player's own copy is always there. The intended end state is
+that at setup the app takes these sounds out of that installation itself
+(decoding the frontend banks) and the menu sounds exactly like the game's, with
+nothing of the game's shipped in this repository. The drop folder below is the
+manual and override path (and how the sounds are cut and tested today); the
+names it wants are the names either way.
+
 ## Where the files go
 
 ```
