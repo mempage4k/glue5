@@ -1211,8 +1211,9 @@ fn draw_toasts(
 }
 
 /// The help line (see [`Hint`]): the game's own shape — one black strap as
-/// high as its words (margins 7/5/4/12), placed where it covers nothing
-/// else, fading in and out. Where it is, if it could be placed.
+/// high as its words (margins 7/5/4/12), hugging the top right corner
+/// (the left is the shell's panel) where it covers nothing else, fading
+/// in and out. Where it is, if it could be placed.
 fn draw_hint(ctx: &egui::Context, safe: Rect, below: f32, taken: &[Rect], hint: &Hint, now: Instant) -> Option<Rect> {
     let scale = theme::layout_scale(safe);
     let margins = vec2((7.0 + 5.0) * scale, (4.0 + 12.0) * scale);
@@ -1225,7 +1226,13 @@ fn draw_hint(ctx: &egui::Context, safe: Rect, below: f32, taken: &[Rect], hint: 
         wrap,
     );
     let size = galley.size() + margins;
-    let at = toast_place(safe, below, size, taken)?;
+    // The game's help line sits in a top corner, not floating mid-top: try
+    // the top right first (over the scene, clear of the panel), and fall
+    // back to the notifications' placement when the corner is busy.
+    let corner = pos2(safe.right() - size.x - 16.0, safe.top() + 12.0);
+    let corner_rect = Rect::from_min_size(corner, size);
+    let corner_free = safe.contains_rect(corner_rect) && !taken.iter().any(|t| t.intersects(corner_rect.expand(4.0)));
+    let at = if corner_free { corner } else { toast_place(safe, below, size, taken)? };
     let shown = now.duration_since(hint.since).as_secs_f32();
     let left = hint.until.saturating_duration_since(now).as_secs_f32();
     let response = egui::Area::new(Id::new("hint"))
