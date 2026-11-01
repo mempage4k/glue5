@@ -1193,14 +1193,17 @@ impl App {
                     #[cfg(target_os = "android")]
                     {
                         let touch_events = self.touch.diagnostics();
-                        if let Err(error) = crate::imports::copy_diagnostics(
+                        match crate::imports::copy_diagnostics(
                             &self.user_dir,
                             self.source,
                             self.game_dir.as_deref(),
                             &self.settings,
                             &touch_events,
                         ) {
-                            self.ui.note(format!("Could not copy import diagnostics: {error:#}"));
+                            Ok(()) => self.ui.alert("Diagnostics copied to the clipboard."),
+                            Err(error) => {
+                                self.ui.note(format!("Could not copy import diagnostics: {error:#}"))
+                            }
                         }
                     }
                     #[cfg(not(target_os = "android"))]
@@ -1208,8 +1211,11 @@ impl App {
                 }
                 Action::CaptureSessionLogcat => {
                     #[cfg(target_os = "android")]
-                    if let Err(error) = crate::imports::request_logcat_capture() {
-                        self.ui.note(format!("Could not request GLUE 5 process log capture via Shizuku: {error:#}"));
+                    match crate::imports::request_logcat_capture() {
+                        Ok(()) => self.ui.alert("Log capture requested via Shizuku."),
+                        Err(error) => {
+                            self.ui.note(format!("Could not request GLUE 5 process log capture via Shizuku: {error:#}"))
+                        }
                     }
                     #[cfg(not(target_os = "android"))]
                     self.ui.note("GLUE 5 process log capture via Shizuku is available in the Android app.");
@@ -1741,6 +1747,7 @@ impl App {
         match glue5_runtime::game_settings::reset_graphics(&self.user_dir) {
             Ok(()) => {
                 log::info!("the game's graphics settings: back to the defaults");
+                self.ui.alert("Graphics settings are back to the defaults.");
                 self.graphics_reset = true;
                 // The low-memory profile lowers them again at the next start.
                 self.settings.low_preset_written = false;
