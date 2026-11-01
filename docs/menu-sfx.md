@@ -41,21 +41,30 @@ files marked "swell" below). Names exactly as below, `<name>.wav` or
 
 | # | File | When it plays | What to look for in GTA V |
 |---|------|---------------|---------------------------|
-| 1 | `focus` | The selection moves one line or one tab: D-pad/stick/arrow keys, or the pointer entering another line. Short, quiet tick; it plays a lot. | `NAV_UP` / `NAV_DOWN` (`HUD_FRONTEND_DEFAULT_SOUNDSET`) |
-| 2 | `confirm` | A/Enter/tap on a line that does something: Play, Open, Choose…, a mode. | `SELECT` |
-| 3 | `back` | B/Esc/tap on Back: leaves a page, cancels an edit, closes GTA Online's card. | `BACK` |
-| 4 | `tab` | Switching category or page: the settings' nine categories, the start page's pages. Softer than `confirm`, no pitch hit. | the tab switch of the pause menu, or `NAV_LEFT` / `NAV_RIGHT` |
-| 5 | `adjust` | A value changes while it stays on the same line: `‹ ›`, a slider step, a keyboard step. Repeats while held, so keep it under ~120 ms. | a slider/step tick; `NAV_LEFT` / `NAV_RIGHT` played quieter |
-| 6 | `toggle_on` | A switch goes on (VSync, Reduce motion, Touch controls, Haptics…). | `TOGGLE_ON` or `YES` |
-| 7 | `toggle_off` | The same switch goes off. | `TOGGLE_OFF` or `NO` |
-| 8 | `open` (swell) | A menu appears over the game or the start page: the settings' gear, the mods' menus (F7), the friends. Up to ~1 s. | the pause-menu opening sound |
-| 9 | `close` (swell) | That menu goes away and the game/start page is back. Up to ~1 s. | the pause-menu closing sound |
-| 10 | `error` | Something cannot happen: Play with no game files, a disabled Choose…, a refused action. | `ERROR` |
-| 11 | `launch` (swell) | Play was accepted: the game is about to start. The one sound that may be loud. Up to ~1.5 s. | the "yes/confirm" stinger before a mission starts |
-| 12 | `notify` | A notification slides in (a friend online, a mod's message). | a Social Club / `HUD_FRONTEND_MP_SOUNDSET` notification |
+| 1 | `focus` | The selection moves one line or one tab: D-pad/stick/arrow keys, or the pointer entering another line. Short, quiet tick; it plays a lot. | `NAV_UP_DOWN` (`HUD_FRONTEND_DEFAULT_SOUNDSET`) — up and down are the same sound |
+| 2 | `confirm` | A/Enter/tap on a line that does something: Play, Open, Choose…, a mode. | `SELECT` (same set) |
+| 3 | `back` | B/Esc/tap on Back: leaves a page, cancels an edit, closes GTA Online's card. | `BACK` (same set); `CANCEL` is its stricter sibling, for dropping what was being edited |
+| 4 | `tab` | Switching category or page: the settings' nine categories, the start page's pages. Softer than `confirm`, no pitch hit. | `NAV_LEFT_RIGHT` (same set), left and right alike |
+| 5 | `adjust` | A value changes while it stays on the same line: `‹ ›`, a slider step, a keyboard step. Repeats while held, so keep it under ~120 ms. | `NAV_LEFT_RIGHT` again, quieter — the same file as `tab` will do (the app already plays it softer) |
+| 6 | `toggle_on` | A switch goes on (VSync, Reduce motion, Touch controls, Haptics…). | no literal name verified (see below) — a short click, rising |
+| 7 | `toggle_off` | The same switch goes off. | no literal name verified — the same click, falling |
+| 8 | `open` (swell) | A menu appears over the game or the start page: the settings' gear, the mods' menus (F7), the friends. Up to ~1 s. | the pause-menu opening sound; no literal name verified |
+| 9 | `close` (swell) | That menu goes away and the game/start page is back. Up to ~1 s. | the pause-menu closing sound; no literal name verified |
+| 10 | `error` | Something cannot happen: Play with no game files, a disabled Choose…, a refused action. | no `ERROR` literal in the decompiled scripts; the phone's `Click_Fail` (`WEB_NAVIGATION_SOUNDS_PHONE`) is the closest verified refusal |
+| 11 | `launch` (swell) | Play was accepted: the game is about to start. The one sound that may be loud. Up to ~1.5 s. | the "yes/confirm" stinger before a mission starts; no literal name verified |
+| 12 | `notify` | A notification slides in (a friend online, a mod's message). | `Text_Arrive_Tone` / `Notification` in the phone scripts (their set is passed dynamically) |
 
 Items 1–11 are the ones the menus need; 12 is optional (the notifications are
 already there and work without it).
+
+The named sounds were verified against the game's own decompiled scripts
+(307 `PLAY_SOUND_FRONTEND` calls across the 22 pause-menu / HUD / phone
+scripts, mined 2026-11-01): the pause menus use exactly `NAV_UP_DOWN`,
+`NAV_LEFT_RIGHT`, `SELECT`, `BACK` and `CANCEL`, all in
+`HUD_FRONTEND_DEFAULT_SOUNDSET` (the freemode menus reuse the same names from
+`HUD_FREEMODE_SOUNDSET`). Where this table says "no literal name verified",
+the game's scripts simply never spell that sound out — it is enough to pick
+something of the same size and feel from the same banks.
 
 ## How they will be played
 
