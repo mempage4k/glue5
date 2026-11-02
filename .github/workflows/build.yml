@@ -10,7 +10,7 @@ on:
       platform:
         description: Platform
         type: choice
-        options: [android, ios, windows, macos, linux-x86_64, linux-aarch64]
+        options: [ios, android, windows, macos, linux-x86_64, linux-aarch64]
         default: android
 
 permissions:

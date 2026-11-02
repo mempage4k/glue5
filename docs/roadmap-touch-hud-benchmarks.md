@@ -67,12 +67,13 @@ Acompanhar evidências e decisão do dono na issue Linear [GLU-27](https://linea
 - O dono confirmou que `Bigger phone` desligado para o ciclo visual, a pé e em carro; ligado, o ciclo volta. Isso valida a mitigação de posição, não o toque direto. O teste foi feito com a opção explicitamente desligada; não há confirmação separada de um primeiro-start com valores padrão.
 - O caso de seleção continua falhando: Michael pré-selecionado + toque em Trevor abre as mensagens de Michael. Portanto o toque direto não está validado.
 
-### Gate pendente com o dono
+### Teste diagnóstico recebido; A/B incompleto
 
-- Rodar no Galaxy S21+ com `Bigger phone` **off** e `Phone touchscreen input` **on**: abrir o telefone, dar um swipe, tocar num app diferente do pré-selecionado, usar o botão virtual **Back/Voltar** e copiar o **Import report**.
-- Comparar a seção de gestos com `Recent phone movie methods` ao redor do toque. O trace anterior só correlaciona tap com `GET_CURRENT_SELECTION`; como não mostra o slot retornado nem coordenadas, ainda não determina se a injeção deve ocorrer no retorno do getter ou antes/depois de `DISPLAY_VIEW`.
-- O dono informou que a build `ce99d1b` não expõe as opções; portanto esse A/B fica bloqueado até haver uma build que inclua as duas chaves e o trace. Pedir apenas as seções relevantes, sem screenshots, coordenadas cruas, nomes/caminhos de saves ou logs de outros processos. Não pedir Shizuku sem autorização explícita.
-- Critério de sucesso: o toque abre o item tocado, distinto do pré-selecionado, sem usar directional stepping nem mouse forwarding como prova; cobrir Badger, Facade, iFruit e Prologue.
+- Em 2026-11-02, o dono enviou um Import report do build `f4add73`, com `Phone touchscreen input=true` e `Bigger phone=false`, após três tentativas. O dono relata que o toque direto não selecionou o alvo; o relatório cobre somente essa combinação, sem comparação com `Bigger phone=true`.
+- No trace, o telefone sai uma vez (`phone out: true` por volta de +47,4 s) e volta uma vez (por volta de +91,2 s); a posição muda uma vez e permanece estável no restante da abertura. Não houve ciclo visual registrado nesta amostra, consistente com a mitigação `Bigger phone=false`; não foi um A/B comparando `true` contra `false`.
+- Os gestos registram taps como `mouse_click` e dois passos `Up`; o filme registra `DISPLAY_VIEW(1,4)`, `SET_INPUT_EVENT(1)`, chamadas `GET_CURRENT_SELECTION` após taps, `DISPLAY_VIEW(6,0)` e, ao sair, `DISPLAY_VIEW(1,1)`. O trace não registra o valor retornado por `GET_CURRENT_SELECTION`, as coordenadas nem o item tocado. Isso mostra uma correlação temporal entre taps e consultas de seleção, mas não identifica qual alvo o jogo usou nem prova causalidade ou que `DISPLAY_VIEW` seja a fronteira de injeção.
+- O dono esclareceu “nada”: a tentativa abriu o item que já estava pré-selecionado, não o alvo tocado. Isso confirma a falha de seleção direta neste cenário (não foi ausência de resposta) e coincide com o caso Michael pré-selecionado + toque em Trevor já registrado acima. O trace continua sem índice retornado nem alvo do toque, portanto não localiza a fronteira de injeção. Não repetir o mesmo ensaio como validação de correção: não há patch de seleção direta neste build. O próximo dado técnico útil é instrumentar o retorno/target.
+- Não registrar neste roadmap os caminhos, nomes de saves, dados do jogador ou blocos de diagnóstico de GPU do relatório. O gate de correção continua: tocar item diferente do pré-selecionado deve abrir o alvo tocado, sem directional stepping nem mouse forwarding como prova, nas quatro variantes.
 
 ### Ainda não pronto / decisões do dono
 
