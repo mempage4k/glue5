@@ -30,6 +30,8 @@
 - [RPF/AWC reader research](rpf-awc-reader.md): reading game archives at runtime (GLU-21; research — implementation belongs to another area). `[MENU]` area.
 - [Round-2 ChatGPT prompt (historical)](prompt-chatgpt-2026-11-01-ysc-full.md): the fulfilled 2026-11-01 request that produced the YSC decompilation lot; kept as record. `[MENU]` area.
 - [[MENU] branch documentation index (historical)](documentacao-branch-menu.md): the index of the docs that lived only on the `[MENU]` branch until the 2026-11-02 integration; kept as the record of that decision.
+- [Windows streaming server and audio mirror audit](windows-stream-audio-audit.md): a supplied Windows audit snapshot, repository streaming behavior, and open questions for optional character-voice downloads.
+- [Streaming flow map](streaming-flow.md): source map from server announcement and discovery to client cache and engine reads; includes the current Android-only support note.
 - [Project diary](project-diary.md): temporary chronological notes; not the source of truth for durable design decisions or backlogs.
 
 **Conventions and governance**
@@ -66,6 +68,8 @@ of truth for `main` until they land there.
 | `streaming-flow.md` | `arena/57946d80-glue5` `[SERV]` | Branch absent from the remote; changes not committed |
 | `windows-stream-audio-audit.md` | `arena/57946d80-glue5` `[SERV]` | Windows snapshot supplied by another chat, **not verified** by that agent |
 | `validation-s21.md` | `[PERF]`, local commit `710d364` | **Not published**: `arena/b8d177aa-glue5` is absent from the remote |
+
+**[SERV] status update (2026-11-02):** The table above is a snapshot from before the server/streaming work was committed and pushed. `streaming-flow.md` and `windows-stream-audio-audit.md` are now tracked on `arena/57946d80-glue5` at `55badd4`; their links are listed above. The Windows audit remains a supplied snapshot, not independently verified by that chat. At the time of this update, the PR to `main` is pending.
 
 `menu-sfx.md` and `project-diary.md` do exist in `main`, but the `[MENU]`
 branch carries different versions; see its index before merging either.
