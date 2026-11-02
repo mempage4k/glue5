@@ -170,6 +170,24 @@ public class Glue5Activity extends SDLActivity {
         } catch (ErrnoException e) {
             // Five Star controls remain unavailable when the model is unknown.
         }
+        // A profile of the game (a build instrumented for PGO, said by
+        // GLUE5_PROFILE): the compiler's profile runtime reads the variable
+        // when the library is loaded, so it is set here, before SDL starts
+        // it. The file goes to the app's own folder in the shared storage,
+        // where the computer can pull it from (`mise run pgo:android`).
+        if (Os.getenv("GLUE5_PROFILE") != null) {
+            File external = getExternalFilesDir(null);
+            if (external != null) {
+                File pgo = new File(external, "pgo");
+                if (pgo.isDirectory() || pgo.mkdirs()) {
+                    try {
+                        Os.setenv("LLVM_PROFILE_FILE", new File(pgo, "game-%m-%p.profraw").getAbsolutePath(), true);
+                    } catch (ErrnoException e) {
+                        // The profile goes to the default place.
+                    }
+                }
+            }
+        }
         // The device's name as its owner set it (Settings › About phone),
         // for the Studio's pages (device.rs), unless the intent named one.
         if (Os.getenv("GLUE5_DEVICE_NAME") == null) {
