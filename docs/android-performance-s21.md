@@ -68,8 +68,124 @@ The report also identifies an intentional drop of the largest mip for BC 2D text
 
 **Gate:** first add/collect thermal and frame-time instrumentation on the S21 Plus. Do not claim throttling or add adaptive quality solely from static inspection.
 
-## Behaviors the report says to preserve
+**Implemented (2026-11-01, not yet measured on the device):** the Android
+Thermal API is now read through the NDK (`AThermal_getCurrentThermalStatus`,
+API 30, and `AThermal_getThermalHeadroom`, API 31, both looked up at run
+time), in `crates/glue5-qos/src/thermal.rs`. A governor turns the readings
+into a level (0 to 3) with hysteresis: it rises after the heat has been
+asked for six seconds and falls one level at a time, every 45 seconds, so a
+phone near a threshold does not flap. The system's own verdict (status
+moderate or worse) is a floor the level jumps to at once.
 
+The level holds the game through the engine's limiter hook
+(`crates/glue5-runtime/src/frame_pace.rs`): 40 fps at level 1, 30 fps at
+levels 2 and 3, on a 120 Hz panel (30 on a 60 Hz one). With
+*Frame rate and resolution*, the last level also renders at 85% of the
+chosen scale (the engine rebuilds its render targets for it: one hitch).
+The performance hint's target follows the cap, so the system does not
+raise clocks chasing a rate the host is not keeping, and the display is
+asked for the same rate. The setting is in Settings › Video › *Thermal
+back-off* (Off / Frame rate / Frame rate and resolution), on by default on
+Android and off elsewhere. The benchmark is left alone: it measures what
+the phone can do.
+
+**Still to measure on the S21 Plus:** the thresholds (0.80 / 0.90 / 0.97 of
+the headroom forecast) are a first guess; the `thermal:` log lines and the
+overlay's *thermal* row are what to tune them from. The headroom forecast
+is not available before Android 12: there the system's status alone decides,
+which is slower to react.
+
+## Second round: the other suggestions (2026-11-01)
+
+The rest of the advice that came with the thermal work was checked against
+this fork, and applied where it was safe to do so without the device at
+hand. What follows is what is already in the tree, what was added, what
+was rejected and why, and what still needs the phone.
+
+### Already there (verified, not duplicated)
+
+- **The upstream command-buffer work.** The `next` branch's "one command
+  buffer per pass" and "passes before barriers" changes are in
+  `patches/wgpu-core` (0007, 0009, 0011) and `patches/wgpu-hal` (0005),
+  and `patches/wgpu-hal/0010` is the read-only depth/stencil store-op
+  change. The Mali command-buffer interleaving that the report describes
+  is therefore not this fork's problem.
+- **The pipeline cache is persisted.** `glue5_gpu::PipelineCache` is
+  created from the user's cache folder (`glue5-gpu/src/lib.rs`), filled
+  after the first frame and written back (`present.rs::save_caches`), so
+  the second launch does not rebuild the pipelines.
+- **`LoadOp::Clear` is what the passes use.** A pass whose attachment has
+  a pending clear loads it as a clear (`ensure_pass`,
+  `glue5-gpu/src/draw.rs`); a clear of another subresource becomes a pass
+  of its own (`exec.rs::record_clear`), which is what a tiling GPU wants
+  (`vkCmdClearAttachments` is the slower path on Mali).
+- **ThinLTO is available and measured.** `GLUE5_GAME_LTO=1`
+  (`crates/glue5-game/build/optimise.rs`); it gave no gain on the
+  desktop, so it is off.
+
+### Applied in this round
+
+- **The phone's big cores** (`crates/glue5-game/build/main.rs`): the game's
+  C is compiled for Android with `-mtune=cortex-a78` (the Exynos 2100's
+  big cores; `-march` still says what is generated). `GLUE5_ANDROID_TUNE`
+  picks another tune (`cortex-x1`) or turns it off (`none`), and the tune
+  is part of the objects' cache key, so a change rebuilds them.
+- **PGO on the phone** (`mise run pgo:android`): an instrumented build
+  (`GLUE5_GAME_PGO=generate`) runs the benchmark on the device
+  (`GLUE5_BENCHMARK=1`: the benchmark starts at once and the app ends when
+  it is over, so the profile is written), the profile is pulled from the
+  app's own folder in the shared storage and merged with the NDK's
+  `llvm-profdata` into `target/glue5-tools/pgo/android/game.profdata`,
+  which the next build uses (`GLUE5_GAME_PGO=<that file>`).
+- **The graphics preset** (Settings › Video › *Graphics preset*, Android):
+  the *Phone* preset writes the game's own settings down — smaller
+  textures, no reflections, no soft shadows, no grass, no anisotropic
+  filtering (`glue5_runtime::game_settings::PHONE`). It is the one lever
+  that cuts the bytes the GPU reads, which is what a Mali-G78 fed by a
+  phone's memory feels most.
+
+### Rejected after inspection
+
+- **Arm's Accuracy Super Resolution.** The library
+  (`arm/accuracy-super-resolution-generic-library`) is C++ with GLSL and
+  HLSL shaders for Vulkan, DirectX 12 and Metal — there is no WGSL, so it
+  would need a full port to this renderer — and it is derived from
+  **FSR 2.2.2**, while this fork already ships **FSR 2.3** (through
+  `patches/sp-fidelity`). It is not an upgrade.
+- **Swappy.** It paces Vulkan and OpenGL swapchains; the pacing of an
+  Android game is `Choreographer`'s and
+  `ANativeWindow_setFrameRate`'s, which the app already uses
+  (`glue5-gpu/src/present.rs`). There is no place for it here.
+- **Turnip and libadrenotools.** They are Adreno drivers; the S21 Plus has
+  a Mali. The app's driver picker says so, and the phone's own driver is
+  what runs.
+
+### Still to do with the phone at hand
+
+- **Measure before touching the passes.** The pass census is already in
+  the GPU log (`op N/frame` lines, `Stats.pass_ends`): the split between
+  the copies, the clears, the mip generation, the readbacks and the
+  dispatches is what says where the frame goes. The mip generation alone
+  is 12 to 14 passes, about 1 ms.
+- **`StoreOp::Discard` has no safe case yet.** Every attachment this
+  engine draws into is read again later (the scene's colour by the
+  compose pass, the depth by the motion vectors, the mip chain by the
+  next level), and a discarded attachment is not in memory to be sampled.
+  The one place it would pay is the frame's final image, which the
+  compose pass still reads.
+- **The thermal thresholds** (0.80 / 0.90 / 0.97 of the headroom
+  forecast) are a first guess; the `thermal:` log lines are what to tune
+  them from.
+- **The 30 fps goal.** Cap the frame rate at 30 (40 on the 120 Hz
+  panel), lower the resolution scale and turn the graphics preset on;
+  measure with the game's own benchmark (Benchmark on the start page) and
+  the performance overlay.
+- **Samsung's Game Booster** (Settings › Game Booster on the phone) can
+  hold the performance or the battery; its own settings are outside the
+  app's reach, and the thermal back-off is the app's answer to the same
+  heat.
+
+## Behaviors the report says to preserve
 - Request only GPU features exposed by the adapter.
 - Keep the current Vulkan 1.1 requirement unless separate compatibility evidence supports changing it.
 - Keep FSR conditional on the required adapter features.
@@ -89,6 +205,10 @@ These are also report claims to verify where relevant, not a substitute for the 
 
 ## Status
 
-- This is a static-review backlog; no S21-specific GPU or thermal change has been implemented from the Kimi report.
+- This is a static-review backlog; the S21-specific changes so far are the
+  Android thermal back-off (finding 6), written from the API's
+  documentation, and the second round above (the CPU tune, PGO on the
+  phone, the graphics preset). None of them has been measured on the
+  device.
 - No device profiling or validation result is recorded yet.
 - Record each investigation and its measurements here; put stable architectural decisions in `design.md`, and user-facing settings in `playing.md`.

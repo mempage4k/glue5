@@ -150,6 +150,7 @@ to eight C compilations of ~15 MB files at once.
 | Record pipelines on automated runs into the app's seed | `mise run shaders:collect [levels]` |
 | Merge recorded pipelines into the seed | `mise run shaders:seed <pipelines.jsonl>...` |
 | A PGO profile from the benchmark | `mise run pgo` |
+| A PGO profile from a phone's benchmark | `mise run pgo:android` |
 | iPhone / iPad | `mise run ios`, `ios:build`, `ios:ipa`, `ios:run`, `ios:game` |
 | Apple TV | `mise run tvos`, `tvos:build`, `tvos:run`, `tvos:sim` |
 | Android | `mise run android`, `android:build`, `android:run`, `android:game` |
@@ -170,6 +171,7 @@ and `GLUE5_*` variables on to the device.
 | `GLUE5_ENGINE_ARGS` | More engine switches, e.g. `-benchmark -benchmarkIterations=1`. |
 | `GLUE5_DEVICE_NAME` | The name GLUE 5 Studio's pages show for this device (by default its own: the computer's or the phone's name in the system's settings; on iOS, "iPhone" or "iPad" without Apple's user-assigned-device-name entitlement). |
 | `GLUE5_PLAY=1` | Start the game without the start page (`--play` on a computer). |
+| `GLUE5_BENCHMARK=1` | Start the game's benchmark at once and end the app when it is over: a measurement on a phone, whose screen nobody taps (the results are in the log). |
 | `GLUE5_GPU_PROFILE=1` | GPU time per render pass in the statistics. |
 | `GLUE5_NO_BC=1`, `GLUE5_NO_FLOAT32_FILTER=1`, `GLUE5_NO_ETC2=1` | A phone GPU's fallbacks on a desktop GPU, for testing. |
 | `GAMERESOURCEMB`, `KEEPTHREADS` | The engine's module settings, as the browser build reads them. |
@@ -186,6 +188,8 @@ Windows' clang-cl).
 |---|---|
 | `GLUE5_GAME_LTO=1` | ThinLTO across the game's 64 C files: inlining across them (a build of ~3 min on an M1 Pro, its link cached per target). |
 | `GLUE5_GAME_PGO=<file.profdata>` | The game compiled with a profile, its functions run gathered together; `mise run pgo` makes the profile from the benchmark (`target/glue5-tools/pgo`). |
+| `GLUE5_GAME_PGO=generate` | The game compiled instrumented: it writes a profile when the app ends (`mise run pgo:android` does the whole round on a phone). The profile's place is `LLVM_PROFILE_FILE`; on a phone the activity sets it (`GLUE5_PROFILE=1`). |
+| `GLUE5_ANDROID_TUNE=<cpu>` | The CPU the game's C is tuned for on Android (`cortex-a78` by default, `cortex-x1`, `none` to turn it off). |
 
 ## Repository layout
 

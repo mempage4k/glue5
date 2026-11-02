@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+#MISE description="Profile the game on an Android phone for PGO: an instrumented build runs the benchmark on the device, its profile pulled and merged into target/glue5-tools/pgo/android/game.profdata (then build with GLUE5_GAME_PGO=<that file>)"
+#MISE depends=["setup"]
+#MISE raw=true
+#USAGE arg "[device]" help="Serial number (adb devices; default: the only one connected)"
+. "$(dirname "$0")/../android/lib.sh"
+
+sdk_packages
+if [ -n "${usage_device:-}" ]; then export ANDROID_SERIAL=$usage_device; fi
+
+dir="$PWD/target/glue5-tools/pgo/android"
+rm -rf "$dir"
+mkdir -p "$dir/raw"
+
+# The instrumented build: the game records what it runs. The app's own
+# build script reads the variable.
+export GLUE5_GAME_PGO=generate
+android_libs
+android_apk
+adb install -r "$apk"
+
+# The run: the benchmark at once, and the app ends when it is over (the
+# profile is written when the process ends). The profile's place is set by
+# the activity, which reads GLUE5_PROFILE.
+export GLUE5_PROFILE=1
+export GLUE5_BENCHMARK=1
+launch
+
+# The file the run wrote, in the app's own folder in the shared storage.
+mapfile -t profiles < <(adb shell ls "/sdcard/Android/data/$package/files/pgo" 2>/dev/null | tr -d '\r')
+for profile in "${profiles[@]}"; do
+    [ -n "$profile" ] || continue
+    adb pull "/sdcard/Android/data/$package/files/pgo/$profile" "$dir/raw/" >/dev/null
+done
+ls "$dir"/raw/*.profraw >/dev/null 2>&1 || die "the run wrote no profile (is the build instrumented? GLUE5_GAME_PGO=generate)"
+
+# Merged with the NDK's own tools (the ones that built the game).
+profdata=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-profdata 2>/dev/null | head -1)
+[ -n "$profdata" ] || die "no llvm-profdata in the NDK"
+"$profdata" merge -o "$dir/game.profdata" "$dir"/raw/*.profraw
+rm -rf "$dir/raw"
+# The functions run, the busiest first (by their blocks' counts): the build
+# gathers them into files of their own (crates/glue5-game/build/hot.rs).
+"$profdata" show --all-functions --counts "$dir/game.profdata" |
+    awk '/^  [^ ].*:$/ { name = substr($0, 3, length($0) - 3) }
+        /Block counts:/ { gsub(/[^0-9,]/, ""); n = split($0, c, ","); s = 0; for (i = 1; i <= n; i++) s += c[i]; if (s > 0) print s, name }' |
+    sort -rn | awk '{ print $2 }' >"$dir/hot.txt"
+echo "profile: $dir/game.profdata ($(wc -l <"$dir/hot.txt") functions run)"
+echo "build the game with it: GLUE5_GAME_PGO=$dir/game.profdata mise run android:build"
+echo "(the app on the phone is the instrumented one: rebuild before playing)"
