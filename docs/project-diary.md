@@ -166,6 +166,10 @@ Registro de requisitos, observações e decisões do GLUE 5. **Não incluir dado
   - Nova chave **Settings › Diagnostics › "Phone touchscreen input"** (padrão ligada, `Settings::phone_touchscreen`): desligada, o runtime não troca `LAST_DEVICE` para teclado/mouse por causa do celular — o pad (D-pad/botões ao lado do aparelho) comanda o celular. Se o ciclo parar com ela desligada, o gatilho é a troca de dispositivo; se continuar, é interno do jogo mesmo com o pad no comando.
 - **Validação pendente:** sem toolchain Rust neste ambiente, não rodei `cargo test` nem build Android. Protocolo para o usuário: buildar, reproduzir com a chave ligada e copiar o Import report; depois desligar a chave, reproduzir de novo e mandar o segundo relatório (e dizer se o ciclo parou). Os dois relatórios juntos apontam o culpado sem chute.
 
+## 2026-11-01 — Identificação do chat de streaming/servidor
+
+- [SERV] Código de área adotado por este chat Arena.ai para streaming, descoberta e servidor `glue5-serve`; distinto de `MENU` e `PERF`.
+
 ## 2026-10-31 — Os dois relatórios chegaram: o estado do celular não cicla (sexto relato)
 
 - Protocolo A/B executado pelo usuário na build `ba0becc`, chave ligada e desligada, a pé e em carro: **o ciclo visual acontece nos dois modos**. E os traces novos contam a história que faltava:
