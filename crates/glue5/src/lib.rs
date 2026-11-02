@@ -28,6 +28,8 @@ mod keyboard;
 mod keymap;
 mod pads;
 mod paths;
+#[cfg(glue5_game_pgo)]
+mod profile;
 mod settings;
 mod sfx;
 mod sharing;
@@ -51,6 +53,11 @@ pub fn main() -> i32 {
         let level = filter.filter();
         android_logger::init_once(android_logger::Config::default().with_tag("glue5").with_max_level(level).with_filter(filter));
     }
+    // The game's profile, if the game was built instrumented for PGO
+    // (`GLUE5_GAME_PGO=generate`): the folder it goes to. The file itself
+    // is written when the process ends (below).
+    #[cfg(glue5_game_pgo)]
+    crate::profile::prepare();
     // A host thread serving the engine (the renderer's, ...) that panics
     // leaves it waiting forever, as an engine thread's trap does.
     let report = std::panic::take_hook();
@@ -63,14 +70,29 @@ pub fn main() -> i32 {
         let what = info.payload_as_str().unwrap_or("panic");
         glue5_runtime::exit::fail(format!("its {} thread stopped ({what})", thread.name().unwrap_or("unnamed")));
     }));
-    match app::run() {
+    let code = match app::run() {
         Ok(()) => 0,
         Err(e) => {
             log::error!("{e:#}");
             let _ = show_simple_message_box(MessageBoxFlag::ERROR, "Glue 5", &format!("{e:#}"), None);
             1
         }
-    }
+    };
+    // The profile, if the game was built instrumented: the process ends
+    // without the exit handlers, so the runtime writes it here.
+    write_profile();
+    code
+}
+
+/// Writes the game's profile, if the game was built instrumented for PGO
+/// (`GLUE5_GAME_PGO=generate`).
+///
+/// The process ends without the exit handlers (see
+/// `glue5_runtime::exit::process`), so the profile runtime is told to
+/// write its file while it still can.
+pub fn write_profile() {
+    #[cfg(glue5_game_pgo)]
+    crate::profile::write();
 }
 
 #[cfg(any(target_os = "ios", target_os = "tvos"))]

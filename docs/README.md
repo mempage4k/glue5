@@ -21,6 +21,7 @@
 **Engineering investigations**
 
 - [Android performance: Galaxy S21 Plus](android-performance-s21.md): device-specific hypotheses, verification gates and measurements; static review only until validated on hardware.
+- [Validation on the S21 Plus](validation-s21.md): what a build has to prove on the device, in order — the thermal back-off, the phone preset, the PGO round and the frame rate goal.
 - [Touch, HUD and benchmark roadmap](roadmap-touch-hud-benchmarks.md): scoped implementation backlog and progress for touch/HUD and GLUE 5 benchmarks.
 - [GTA V runtime patches](gta-patches.md): durable rules, evidence, patch boundaries, and open questions for future GTA patch work.
 - [Windows streaming server and audio mirror audit](windows-stream-audio-audit.md): a supplied Windows audit snapshot, repository streaming behavior, and open questions for optional character-voice downloads.
@@ -60,11 +61,11 @@ of truth for `main` until they land there.
 | `protocolo-identificacao.md` | `arena/4f5cc306-glue5` `[MENU]` | **Mirrored verbatim in this branch** (from `a2e5bfe`) |
 | `gta5-referencia/` (7 CSVs) | `arena/4f5cc306-glue5` `[MENU]` | Branch-only measurement data |
 | `gta-patches.md` | `arena/107599ac-glue5` (PR #12) `[TOUCH]` | Branch-only; linked from that branch's `docs/README.md` |
-| `validation-s21.md` | `[PERF]`, `arena/b8d177aa-glue5` per Linear comments | **Not published**: that branch is absent from the remote |
+| `validation-s21.md` | `[PERF]`, `arena/b8d177aa-glue5` per Linear comments | **Published**: the branch is on the remote; the document lands in `main` with this PR |
 | `documentacao-branch-menu.md` | `arena/4f5cc306-glue5` `[MENU]` | Local commit `84befb0`, **not pushed**; the detailed index of the branch-only docs |
 | `streaming-flow.md` | `arena/57946d80-glue5` `[SERV]` | Branch absent from the remote; changes not committed |
 | `windows-stream-audio-audit.md` | `arena/57946d80-glue5` `[SERV]` | Windows snapshot supplied by another chat, **not verified** by that agent |
-| `validation-s21.md` | `[PERF]`, local commit `710d364` | **Not published**: `arena/b8d177aa-glue5` is absent from the remote |
+| `validation-s21.md` | `[PERF]`, commit `19f751d` (the `710d364` of an earlier clone) | **Published**: the branch is on the remote; the document lands in `main` with this PR |
 
 **[SERV] status update (2026-11-02):** The table above is a snapshot from before the server/streaming work was committed and pushed. `streaming-flow.md` and `windows-stream-audio-audit.md` are now tracked on `arena/57946d80-glue5` at `55badd4`; their links are listed above. The Windows audit remains a supplied snapshot, not independently verified by that chat. At the time of this update, the PR to `main` is pending.
 

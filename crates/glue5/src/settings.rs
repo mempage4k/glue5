@@ -34,6 +34,11 @@ pub struct Settings {
     /// the first start with the effective low-memory profile; the game's menu
     /// changes it after).
     pub low_preset_written: bool,
+    /// The graphics preset the app writes over the game's own settings (a
+    /// phone: the parts that cost the most bandwidth and fill rate), and
+    /// whether it is already in them.
+    pub graphics_preset: GraphicsPreset,
+    pub graphics_preset_written: bool,
     /// The player's own debug touch areas are shown and active over the
     /// game (Settings › Diagnostics). Editing them is a separate mode.
     pub debug_touch_areas_visible: bool,
@@ -47,6 +52,9 @@ pub struct Settings {
     /// At most this many frames per second; 0: no limit of the engine's
     /// (the display's refresh rate with VSync).
     pub max_fps: u32,
+    /// Android: how the game backs off as the phone heats up: a lower frame
+    /// cap, and with `CapAndScale` a smaller render scale at the last level.
+    pub thermal_adapt: ThermalAdapt,
     /// How the game's frames are scaled up to the window (what the GPU has
     /// of it; the bicubic filter otherwise).
     pub upscaler: Upscaling,
@@ -294,6 +302,39 @@ impl Upscaling {
     }
 }
 
+/// How the game backs off as the phone heats up (Android; see
+/// `glue5_qos::thermal`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThermalAdapt {
+    Off,
+    /// A lower frame cap as the heat rises.
+    Cap,
+    /// The cap, and a smaller render scale at the last level (the engine
+    /// rebuilds its render targets for it: a hitch).
+    CapAndScale,
+}
+
+/// The graphics preset the app writes over the game's own settings (the
+/// engine's `settings.xml`), once, before the game starts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GraphicsPreset {
+    /// The game's settings are its own: the app writes nothing.
+    #[default]
+    Off,
+    /// The phone preset: the same world, with the parts that cost the most
+    /// bandwidth and fill rate turned down (see
+    /// `glue5_runtime::game_settings`).
+    Phone,
+}
+
+impl Default for ThermalAdapt {
+    fn default() -> Self {
+        if cfg!(target_os = "android") { ThermalAdapt::Cap } else { ThermalAdapt::Off }
+    }
+}
+
 /// When the on-screen controls show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -401,12 +442,15 @@ impl Default for Settings {
             memory_profile: MemoryProfile::Auto,
             low_memory: None,
             low_preset_written: false,
+            graphics_preset: GraphicsPreset::default(),
+            graphics_preset_written: false,
             debug_touch_areas_visible: false,
             debug_touch_areas: Vec::new(),
             render_scale: None,
             vsync: true,
             // Phones hold a steady 60 for longer than they hold 120 (heat).
             max_fps: if MOBILE { 60 } else { 0 },
+            thermal_adapt: ThermalAdapt::default(),
             // MetalFX is only provided on Apple GPUs; elsewhere start with
             // the spatial filter that is always available.
             upscaler: if cfg!(target_vendor = "apple") {
@@ -651,6 +695,18 @@ mod tests {
         assert!(!settings.phone_enlarge, "phone enlargement defaults to the safe, game-owned position");
         let opted_in: Settings = serde_json::from_str(r#"{"phone_enlarge":true}"#).unwrap();
         assert!(opted_in.phone_enlarge, "the player can still explicitly enable enlargement");
+    }
+
+    #[test]
+    fn the_thermal_back_off_is_off_away_from_android() {
+        let default = if cfg!(target_os = "android") { ThermalAdapt::Cap } else { ThermalAdapt::Off };
+        assert_eq!(ThermalAdapt::default(), default);
+        assert_eq!(serde_json::to_string(&ThermalAdapt::Off).unwrap(), "\"off\"");
+        assert_eq!(serde_json::to_string(&ThermalAdapt::Cap).unwrap(), "\"cap\"");
+        assert_eq!(serde_json::to_string(&ThermalAdapt::CapAndScale).unwrap(), "\"cap-and-scale\"");
+        // An older settings file has no thermal setting: the default stands.
+        let settings: Settings = serde_json::from_str(r#"{"max_fps": 60}"#).unwrap();
+        assert_eq!(settings.thermal_adapt, default);
     }
 
     #[test]

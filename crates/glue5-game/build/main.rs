@@ -188,11 +188,22 @@ fn run() -> Result<()> {
     if env::var("TARGET")? == "aarch64-apple-tvos" {
         build.flag("-mcpu=apple-a12");
     }
+    // The CPU the game's C is tuned for, if any (Android only; the tune is
+    // read once, here, so the flag and the objects' key agree).
+    let tune = android_tune();
     // Android likewise defaults to ARMv8.0, with atomics as calls that pick
     // LSE at run time. Phones that can run the game have ARMv8.2 cores
     // (Cortex-A55/A75 and later), none of them a Cortex-A53.
     if env::var("TARGET")? == "aarch64-linux-android" {
         build.flag("-march=armv8.2-a").flag("-mno-fix-cortex-a53-835769");
+        // The big cores the game runs on: the Exynos 2100's Cortex-A78 (the
+        // Galaxy S21+). -mtune only tells the compiler which core it is
+        // scheduling for; the code generated is still ARMv8.2 (what -march
+        // says), so it runs on any of them. GLUE5_ANDROID_TUNE picks
+        // another (cortex-x1) or turns it off (none).
+        if let Some(tune) = &tune {
+            build.flag(format!("-mtune={tune}"));
+        }
     }
     if env::var("CARGO_CFG_TARGET_ARCH")? == "x86_64" {
         build.flag_if_supported("-msse4.1"); // SIMDe maps wasm SIMD much better with SSE4.1
@@ -237,13 +248,16 @@ fn run() -> Result<()> {
     let game_key = key(&[gen_dir.join("game.h"), gen_dir.join("game-impl.h")])?;
     let glue_key = key(&[gen_dir.join("game.h"), manifest.join("csrc/glue5.h")])?;
     let runtime_key = key(&[])?;
+    // The tune is part of the compiler's command line, so the objects of a
+    // build with another one are not the same: it belongs to their key.
+    let tune_key = tune.clone().unwrap_or_default();
 
     // Cargo's -j, but at most 8: each job holds a 15 MB C file's compilation.
     let jobs = env::var("NUM_JOBS").ok().and_then(|j| j.parse().ok()).unwrap_or(4).min(8);
     let cache = tools.join("objcache").join(env::var("TARGET")?);
     let mut game_build = build.clone();
     optimise.apply(&mut game_build);
-    let game_key = format!("{game_key}{}", optimise.key());
+    let game_key = format!("{game_key}{}{tune_key}", optimise.key());
     let objects = compile::compile(&game_build, &sources, &game_key, &cache, jobs)?;
     let ltocache = tools.join("ltocache").join(env::var("TARGET")?);
     let mut objects = optimise.link(&game_build, objects, &ltocache, &out)?;
@@ -255,6 +269,20 @@ fn run() -> Result<()> {
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=glue5_game");
     Ok(())
+}
+
+/// The CPU the game's C is tuned for on Android (`GLUE5_ANDROID_TUNE`):
+/// the phone's big cores, the ones the game runs on. `none` (or an empty
+/// value) turns the tune off.
+fn android_tune() -> Option<String> {
+    println!("cargo:rerun-if-env-changed=GLUE5_ANDROID_TUNE");
+    let tune = env::var("GLUE5_ANDROID_TUNE").unwrap_or_else(|_| "cortex-a78".to_string());
+    let tune = tune.trim();
+    if tune.is_empty() || tune == "none" {
+        None
+    } else {
+        Some(tune.to_string())
+    }
 }
 
 /// The single `b/<build>/game.wasm` under the game directory.

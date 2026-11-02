@@ -208,6 +208,34 @@ pub struct Started {
     pub mods: bool,
 }
 
+/// The phone's heat, and the back-off the game is held to because of it.
+#[derive(Clone, Copy, Debug)]
+pub struct Thermal {
+    /// The back-off level: 0 (none) to 3.
+    pub level: u8,
+    /// The frames per second the game is held to (0: not held back).
+    pub fps: u32,
+    /// The system's own state: 0 none, 1 light, 2 moderate, 3 severe, 4
+    /// critical, 5 emergency, 6 shutdown; -1: not read.
+    pub status: i32,
+}
+
+impl Thermal {
+    /// The system's state, in a word.
+    pub fn state(&self) -> &'static str {
+        match self.status {
+            0 => "none",
+            1 => "light",
+            2 => "moderate",
+            3 => "severe",
+            4 => "critical",
+            5 => "emergency",
+            6 => "shutdown",
+            _ => "unknown",
+        }
+    }
+}
+
 /// What the pages show about the application.
 pub struct Status<'a> {
     /// The game's folder, if found.
@@ -233,6 +261,12 @@ pub struct Status<'a> {
     pub metal_hud: bool,
     /// The display's refresh rate at most, in Hz.
     pub refresh_rate: f32,
+    /// The frames per second the game is held to (0: the display's rate):
+    /// the setting's, or the thermal back-off's if that is slower.
+    pub frame_cap: u32,
+    /// The phone's heat, and what the game is held to because of it (Android;
+    /// none elsewhere).
+    pub thermal: Option<Thermal>,
     /// Play waits for the game's pipelines: how far they are (0 to 1).
     pub preparing: Option<f32>,
     /// The mode Play starts (or the last one played).

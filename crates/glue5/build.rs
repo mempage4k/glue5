@@ -3,6 +3,13 @@ use std::{path::PathBuf, process::Command};
 fn main() {
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
     println!("cargo:rerun-if-env-changed=GLUE5_BUILD_ID");
+    // The game built instrumented for PGO (`GLUE5_GAME_PGO=generate`): the
+    // app then tells the profile runtime where to write its file.
+    println!("cargo:rerun-if-env-changed=GLUE5_GAME_PGO");
+    println!("cargo:rustc-check-cfg=cfg(glue5_game_pgo)");
+    if std::env::var("GLUE5_GAME_PGO").as_deref() == Ok("generate") {
+        println!("cargo:rustc-cfg=glue5_game_pgo");
+    }
 
     let repo_root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo sets the manifest directory"))
         .join("../..");

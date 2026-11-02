@@ -304,6 +304,21 @@ para 30–40 fps com *stutter* irregular. Uma port de verdade reage antes do usu
 4. Pedir `Window.setSustainedPerformanceMode(true)` (ou o hint equivalente do SDL) para o SoC não
    tentar "turbo" e cair depois.
 
+**Correção feita (2026-11-01, sem validação no aparelho).** O Thermal do NDK
+(`AThermal_getCurrentThermalStatus`, API 30; `AThermal_getThermalHeadroom`,
+API 31) é lido em tempo de execução em `crates/glue5-qos/src/thermal.rs`. Um
+*governor* com histerese vira as leituras em níveis 0–3: sobe depois de 6 s de
+calor pedido, desce um nível de cada vez a cada 45 s, e o veredito do sistema
+(status moderate ou pior) é um piso que o nível alcança de uma vez. O nível
+segura o jogo pelo hook do limitador (`crates/glue5-runtime/src/frame_pace.rs`):
+40 fps no nível 1, 30 fps nos níveis 2 e 3 (em tela de 120 Hz). A opção
+*Frame rate and resolution* baixa também a escala de renderização no último
+nível. O alvo do *performance hint* acompanha o limite, para o sistema não
+subir os clocks atrás de uma taxa que o host não segura. Configurável em
+Settings › Video › *Thermal back-off*. Os limiares ainda são umapalpite:
+as linhas `thermal:` do log e a linha *thermal* do overlay são o que falta
+medir no S21+.
+
 **Referências.** [14] Thermal API (PowerManager), [15] Thermal (NDK).
 
 ---

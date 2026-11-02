@@ -49,11 +49,28 @@ are GPU-bound, and the CPU's busiest threads are the engine's own.
 
 - The engine's threads (main, render, workers, audio) are now the busiest:
   83-97 % of their time is the game's code. ThinLTO of that code
-  (`GLUE5_GAME_LTO=1`) showed no gain, on a Mac or on the Pixel. PGO
-  (`mise run pgo`) is untried on the phones.
+  (`GLUE5_GAME_LTO=1`) showed no gain, on a Mac or on the Pixel. PGO is
+  possible on a phone now (`mise run pgo:android`, see
+  [the S21+ document](docs/android-performance-s21.md)), but still
+  untried there: the profile has to be taken on the device, and a build
+  with it measured against one without. The profile itself is written by
+  the app (`__llvm_profile_write_file`), not by the exit handler: the
+  process ends without one (`glue5_runtime::exit::process` ends it with
+  `_exit`, the engine's threads still running).
 
 ## Measured and rejected
 
 - ThinLTO of the game's code: no gain (see above).
 - Storage buffers in bind groups of their own: fewer bind groups, slower
   encoding, same frame rate.
+- Arm's Accuracy Super Resolution: the library is C++ with GLSL and HLSL
+  shaders (no WGSL), so it would need a full port, and it is derived from
+  FSR 2.2.2 while this tree already ships FSR 2.3.
+- Swappy: it paces Vulkan and OpenGL swapchains; an Android game's
+  pacing is `Choreographer`'s and `ANativeWindow_setFrameRate`'s.
+- `StoreOp::Discard` on the renderer's own targets: every attachment the
+  engine draws into is read again later (the scene's colour by the
+  compose pass, the depth by the motion vectors, the mip chain by the
+  next level), and a discarded attachment is not in memory to be sampled.
+  The last image of the frame is the compose pass's input, so it cannot
+  be discarded either.

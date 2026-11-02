@@ -26,7 +26,7 @@ use crate::haptics;
 use crate::paths::{self, MOBILE, TOUCH, TV};
 use crate::settings::{self, PerfOverlay, Settings, Source, TouchLayout, TouchMode, Upscaling};
 #[cfg(target_os = "android")]
-use crate::settings::{GyroAim, TiltSteer};
+use crate::settings::{GyroAim, ThermalAdapt, TiltSteer};
 use crate::touch::{self, Touch};
 use crate::sfx;
 use crate::ui::{self, Action, Mode, Page, Started, Status, Ui};
@@ -429,6 +429,8 @@ pub fn run() -> Result<()> {
         window,
         #[cfg(target_os = "android")]
         asked_rate: None,
+        #[cfg(target_os = "android")]
+        heat: Default::default(),
         #[cfg(target_os = "ios")]
         thermal: (-1, None),
         text_input,
@@ -473,6 +475,7 @@ pub fn run() -> Result<()> {
         play_requested: false,
         mode,
         benchmark: last_benchmark,
+        benchmark_only: args.benchmark,
         join: None,
         friend_name: String::new(),
         capture_since: None,
@@ -496,7 +499,13 @@ pub fn run() -> Result<()> {
         app.settings.save(&app.user_dir);
     }
     app.find_game(args.game_dir.as_deref());
-    if args.play {
+    if args.benchmark {
+        // The measurement run (`GLUE5_BENCHMARK`): the benchmark starts at
+        // once, and the app ends when it is over (a profile, in a PGO
+        // build, is written when the process ends).
+        app.mode = Mode::Benchmark;
+    }
+    if args.play || args.benchmark {
         match app.settings.source {
             Source::Folder if app.game_dir.is_some() => app.play()?,
             Source::Folder => {}
@@ -514,11 +523,14 @@ struct Args {
     /// Start the game without the start page.
     play: bool,
     game_dir: Option<PathBuf>,
+    /// Start the benchmark at once and end the app when it is over: a
+    /// measurement on a phone, whose screen nobody taps (`GLUE5_BENCHMARK`).
+    benchmark: bool,
 }
 
 impl Args {
     fn parse() -> Args {
-        let mut args = Args { play: false, game_dir: None };
+        let mut args = Args { play: false, game_dir: None, benchmark: false };
         // Phones pass arguments of their own.
         for arg in std::env::args_os().skip(1).filter(|_| !MOBILE) {
             if arg == "--play" {
@@ -530,6 +542,7 @@ impl Args {
         // Measurements on a phone, whose screen nobody taps (`mise run ios:run`
         // passes GLUE5_* variables on).
         args.play |= std::env::var_os("GLUE5_PLAY").is_some();
+        args.benchmark |= std::env::var_os("GLUE5_BENCHMARK").is_some();
         args
     }
 }
@@ -632,6 +645,9 @@ struct App {
     /// The display rate asked of Android for the window's surface.
     #[cfg(target_os = "android")]
     asked_rate: Option<u32>,
+    /// Android's thermal state, and how far the game backs off for it.
+    #[cfg(target_os = "android")]
+    heat: glue5_runtime::qos::thermal::Governor,
     /// The device's thermal state (iOS: 0 nominal to 3 critical) and when it
     /// was last asked.
     #[cfg(target_os = "ios")]
@@ -722,6 +738,9 @@ struct App {
     mode: Mode,
     /// The last benchmark's results.
     benchmark: Option<benchmark::Results>,
+    /// The benchmark is a measurement run (`GLUE5_BENCHMARK`): the app ends
+    /// when it is over, instead of showing the results and staying.
+    benchmark_only: bool,
     /// GTA Online starts in a friend's lobby (its name) rather than the
     /// player's.
     join: Option<String>,
@@ -1168,11 +1187,18 @@ impl App {
         glue5_gpu::census::set_on(in_game && self.settings.overlay == PerfOverlay::Glue5);
         #[cfg(target_os = "ios")]
         self.watch_thermal();
-        self.presentation.set_frame_rate(self.settings.max_fps);
         #[cfg(target_os = "android")]
-        if self.asked_rate != Some(self.settings.max_fps) {
-            self.asked_rate = Some(self.settings.max_fps);
-            ask_frame_rate(&self.window, self.settings.max_fps);
+        self.watch_heat();
+        // The frames per second the game is held to: the setting's, or the
+        // thermal back-off's if that is slower (the performance hint's
+        // target follows it, so the system does not chase a rate the host
+        // is not keeping).
+        let fps = self.frame_cap();
+        self.presentation.set_frame_rate(fps);
+        #[cfg(target_os = "android")]
+        if self.asked_rate != Some(fps) {
+            self.asked_rate = Some(fps);
+            ask_frame_rate(&self.window, fps);
         }
         self.presentation.set_upscaler(upscaler(&self.settings));
         self.presentation.set_sharpness(self.settings.sharpness);
@@ -1199,6 +1225,8 @@ impl App {
                 frame_generation: self.frame_generation,
                 metal_hud: self.metal_hud,
                 refresh_rate: self.refresh_rate,
+                frame_cap: self.frame_cap(),
+                thermal: self.thermal_state(),
                 preparing: self.play_requested.then(|| self.screen.as_ref().and_then(Screen::progress)).flatten(),
                 mode: self.mode,
                 benchmark: self.benchmark.as_ref(),
@@ -1594,13 +1622,14 @@ impl App {
     /// one rebuild per resize. Phone windows never change size; only the
     /// scale moves their back buffer.
     fn resize_game(&mut self) {
+        let scale = self.render_scale();
         let Some(game) = &mut self.game else { return };
         let Some(input) = &game.input else { return };
         let (w, h) = self.window.size_in_pixels();
         if w == 0 || h == 0 {
             return;
         }
-        let size = settings::render_size((w, h), self.settings.render_scale(), game.started.low_memory);
+        let size = settings::render_size((w, h), scale, game.started.low_memory);
         if size != game.back_buffer {
             log::info!("back buffer {}x{}", size.0, size.1);
             input.resize(size.0, size.1);
@@ -1621,8 +1650,18 @@ impl App {
             return Ok(());
         }
         let Some(screen) = self.screen.take() else { return Ok(()) };
-        // Graphics quality is the game's own (its menu); the low-memory
-        // profile only lowers it once, after which the menu has the last word.
+        // Graphics quality is the game's own (its menu); the presets only
+        // lower it once, after which the menu has the last word. The phone
+        // preset first: the low-memory one is the stricter of the two.
+        if self.settings.graphics_preset == settings::GraphicsPreset::Phone && !self.settings.graphics_preset_written {
+            match glue5_runtime::game_settings::apply_phone_preset(&self.user_dir) {
+                Ok(()) => {
+                    self.settings.graphics_preset_written = true;
+                    log::info!("the game's graphics settings: phone preset written");
+                }
+                Err(e) => log::warn!("cannot write the phone preset: {e}"),
+            }
+        }
         if self.settings.low_memory() && !self.settings.low_preset_written {
             match glue5_runtime::game_settings::apply_low_preset(&self.user_dir) {
                 Ok(()) => {
@@ -1686,11 +1725,26 @@ impl App {
     /// opens again on its start page, which shows the results; a phone app
     /// cannot, so it shows them before it ends.
     fn benchmark_done(&mut self) {
+        let results = benchmark::last(&self.user_dir);
+        if self.benchmark_only {
+            // The measurement run (`GLUE5_BENCHMARK`): the numbers go to the
+            // log (the phone's screen is nobody's to read) and the app ends.
+            match &results {
+                Some(r) => log::info!(
+                    "benchmark: {:.0} fps on average, {:.0} at least; {:.0}% of the frames in under 33 ms",
+                    r.avg_fps,
+                    r.min_fps,
+                    r.smooth * 100.0
+                ),
+                None => log::info!("benchmark: over, no results"),
+            }
+            return;
+        }
         if !MOBILE {
             relaunch(false);
             return;
         }
-        let text = match benchmark::last(&self.user_dir) {
+        let text = match results {
             Some(r) => format!(
                 "Benchmark: {:.0} fps on average, {:.0} at least; {:.0}% of the frames in under 33 ms.",
                 r.avg_fps,
@@ -1849,6 +1903,83 @@ impl App {
             log::info!("thermal: {}", NAMES.get(state as usize).copied().unwrap_or("?"));
         }
         self.thermal = (state, Some(Instant::now()));
+    }
+
+    /// Android: reads the thermal state and backs the game off as the phone
+    /// heats (`Settings::thermal_adapt`). The frame cap is held by the
+    /// engine's limiter hook (frame_pace), the render scale by
+    /// `resize_game`; both follow the governor's level. Not in the start
+    /// page: the game is not what heats the phone there. Not in the
+    /// benchmark either: it measures what the phone can do.
+    #[cfg(target_os = "android")]
+    fn watch_heat(&mut self) {
+        let now = Instant::now();
+        if self.game.is_none()
+            || self.mode == Mode::Benchmark
+            || self.settings.thermal_adapt == ThermalAdapt::Off
+        {
+            // Nothing to hold back: the reading goes with the level.
+            if self.heat.level() > 0 {
+                glue5_runtime::frame_pace::set_thermal_cap(0);
+            }
+            self.heat.reset();
+            return;
+        }
+        let changed = self.heat.poll(now);
+        let due = self.heat.log_due(now);
+        let level = self.heat.level();
+        let cap = glue5_runtime::qos::thermal::cap(level, self.refresh_rate);
+        if changed || due {
+            let state = self.heat.last();
+            let state = state.map_or_else(|| "no reading".to_string(), |s| {
+                format!("{} (headroom {:.2})", s.status_name(), s.headroom)
+            });
+            log::info!("thermal: level {level} {state} cap {cap}");
+        }
+        glue5_runtime::frame_pace::set_thermal_cap(cap);
+    }
+
+    /// The frames per second the game is held to: the setting's (0: the
+    /// display's rate), or the thermal back-off's if that is slower. The
+    /// presentation and the display hint follow it, so the performance
+    /// hint's target is the rate actually held.
+    fn frame_cap(&self) -> u32 {
+        #[cfg(target_os = "android")]
+        let hot = glue5_runtime::qos::thermal::cap(self.heat.level(), self.refresh_rate);
+        #[cfg(not(target_os = "android"))]
+        let hot = 0;
+        match (self.settings.max_fps, hot) {
+            (0, hot) => hot,
+            (max, 0) => max,
+            (max, hot) => max.min(hot),
+        }
+    }
+
+    /// The render scale the settings ask for, less what the thermal
+    /// back-off takes at its last level (`CapAndScale` only), in 5% steps.
+    fn render_scale(&self) -> f32 {
+        let scale = self.settings.render_scale();
+        #[cfg(target_os = "android")]
+        {
+            if self.settings.thermal_adapt == ThermalAdapt::CapAndScale {
+                return settings::round_scale(scale * glue5_runtime::qos::thermal::scale(self.heat.level()));
+            }
+        }
+        scale
+    }
+
+    /// The phone's heat, and what the game is held to because of it (the
+    /// overlay and the settings show it; none away from Android).
+    fn thermal_state(&self) -> Option<ui::Thermal> {
+        #[cfg(target_os = "android")]
+        let thermal = Some(ui::Thermal {
+            level: self.heat.level(),
+            fps: glue5_runtime::qos::thermal::cap(self.heat.level(), self.refresh_rate),
+            status: self.heat.last().map_or(-1, |s| s.status),
+        });
+        #[cfg(not(target_os = "android"))]
+        let thermal = None;
+        thermal
     }
 
     /// A surface for the window's current native surface, for the renderer
