@@ -343,6 +343,29 @@ fn settings_items(
                 &mut settings.max_fps,
                 &rates,
             );
+            // Android only: the phone's heat holds the game back.
+            #[cfg(target_os = "android")]
+            {
+                let help = match (settings.thermal_adapt, status.thermal) {
+                    (settings::ThermalAdapt::Off, _) => {
+                        "Off: the game runs as it is, however hot the phone is".to_string()
+                    }
+                    (_, Some(t)) if t.level > 0 => {
+                        format!("The phone is {}: the game is held to {} fps", t.state(), t.fps)
+                    }
+                    (_, Some(t)) if t.status >= 0 => {
+                        format!("The phone is {}: the game runs as it is", t.state())
+                    }
+                    _ => "As the phone heats up: fewer frames per second, and a smaller image at the last step"
+                        .to_string(),
+                };
+                let options = [
+                    (settings::ThermalAdapt::Off, "Off"),
+                    (settings::ThermalAdapt::Cap, "Frame rate"),
+                    (settings::ThermalAdapt::CapAndScale, "Frame rate and resolution"),
+                ];
+                let _ = pick_row(ui, "Thermal back-off", &help, &mut settings.thermal_adapt, &options);
+            }
             let low_before = settings.low_memory();
             let low_differs = started.is_some_and(|s| s.low_memory != low_before);
             let memory_profiles = [
@@ -360,6 +383,27 @@ fn settings_items(
                 && settings.low_memory()
             {
                 settings.low_preset_written = false;
+            }
+            // Phones: the game's own settings turned down for the GPU.
+            #[cfg(target_os = "android")]
+            {
+                let help = match settings.graphics_preset {
+                    settings::GraphicsPreset::Off => {
+                        "The game's settings are its own; Restore graphics undoes a preset".to_string()
+                    }
+                    settings::GraphicsPreset::Phone => {
+                        "Smaller textures, no reflections, no soft shadows, at the next start".to_string()
+                    }
+                };
+                let options = [
+                    (settings::GraphicsPreset::Off, "Off"),
+                    (settings::GraphicsPreset::Phone, "Phone"),
+                ];
+                if pick_row(ui, "Graphics preset", &help, &mut settings.graphics_preset, &options) {
+                    // Written over the game's settings at the next start
+                    // (the engine reads them then).
+                    settings.graphics_preset_written = false;
+                }
             }
             let reset_help = if status.graphics_reset {
                 "The game's graphics settings are already the defaults"
@@ -913,6 +957,8 @@ mod tests {
             frame_generation: true,
             metal_hud: false,
             refresh_rate: 120.0,
+            frame_cap: 60,
+            thermal: None,
             preparing: None,
             mode: Mode::Story,
             benchmark: None,

@@ -158,7 +158,8 @@ impl PerfHud {
             self.threads.update(now);
         }
         // The frame time aimed at: the frame rate's limit, else the display's.
-        let budget = 1000.0 / if settings.max_fps > 0 { settings.max_fps as f32 } else { status.refresh_rate.max(1.0) };
+        // The thermal back-off's cap counts: the game is held to it.
+        let budget = 1000.0 / if status.frame_cap > 0 { status.frame_cap as f32 } else { status.refresh_rate.max(1.0) };
         let painter = ctx.layer_painter(LayerId::new(Order::Middle, Id::new("performance overlay")));
         let font = FontId::monospace(FONT);
         let f = &self.figures;
@@ -198,6 +199,9 @@ impl PerfHud {
         let census = if full { census_lines(&self.census) } else { Vec::new() };
         if full {
             height += 7.0 + ROW * threads as f32 + 7.0 + ROW * (3 + scaled.is_some() as usize) as f32;
+            if status.thermal.is_some() {
+                height += ROW;
+            }
             height += 7.0 + ROW * census.len() as f32;
         }
         let rect = place(safe, settings.overlay_corner, vec2(width, height));
@@ -210,8 +214,8 @@ impl PerfHud {
         let color = f.frame.map_or(MUTED, |ms| pace(ms, budget));
         let at = painter.text(pos2(left, y), Align2::LEFT_TOP, fps, FontId::monospace(15.0), color);
         painter.text(pos2(at.max.x + 4.0, y + 4.0), Align2::LEFT_TOP, "fps", font.clone(), MUTED);
-        let aim = if settings.max_fps > 0 {
-            format!("{} max", settings.max_fps)
+        let aim = if status.frame_cap > 0 {
+            format!("{} max", status.frame_cap)
         } else {
             format!("{:.0} Hz", status.refresh_rate)
         };
@@ -273,6 +277,12 @@ impl PerfHud {
         };
         row(y, "mem", memory, TEXT);
         y += ROW;
+        // The phone's heat, and what the game is held to because of it.
+        if let Some(t) = status.thermal {
+            let value = if t.level > 0 { format!("{} · {} fps", t.state(), t.fps) } else { t.state().to_string() };
+            row(y, "thermal", value, if t.level > 0 { SLOW } else { TEXT });
+            y += ROW;
+        }
 
         // What a frame's HUD phase does: whether it has one at all, how big it
         // is, how often it changes target (each change reloads a tile-based
