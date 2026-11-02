@@ -76,7 +76,8 @@ jobs:
       - name: Room on the disk
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
 
-      - uses: jdx/mise-action@v2
+      # Pin the same reviewed mise-action revision used by the multi-platform Build workflow.
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca
         with:
           version: 2026.7.5
           install: true

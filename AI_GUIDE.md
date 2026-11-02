@@ -25,6 +25,14 @@ The app uses SDL for platform, window, input and audio services; egui for much o
 
 `docs/README.md` is the documentation index. `docs/building.md` explains the toolchain and commands; `docs/design.md` explains architecture and constraints.
 
+## Linear and GitHub coordination
+
+Read [`docs/linear-workflow.md`](docs/linear-workflow.md) before beginning project work. Linear is the GLUE 5 work tracker: use it for task scope, priority, ownership, status, acceptance criteria, decisions, blockers, and handoffs. GitHub is the implementation source of truth: verify code, branches, commits, pull requests, workflow definitions, and CI results there. A Linear status or comment never proves that a change exists on the current branch or has passed CI.
+
+Before starting, search the GLU team and `P-GLU-1` project for the relevant issue, read its full description/comments/resources, and confirm the checked-out branch contains the expected code. Update the issue when work starts, when scope or blockers change, and when handing work off. Create a new `[AREA]` issue only when no matching actionable issue exists. Mark work Done only when its acceptance criteria and required validation are actually complete; leave owner-run Android/device validation visibly pending.
+
+Every AI-authored Linear description, comment, or status update must begin with `[IA: <modelo> | Agente/cliente: <ferramenta e contexto>]`. AI-authored material included in a commit must carry the project-required `AI-Contribution: <modelo> | Agente/cliente: <ferramenta>` trailer while preserving Git author/committer fields. The current codename is `willow`; follow the codename change rules in the Linear project guidance and `docs/linear-workflow.md`.
+
 ## Working model for Arena's per-chat branches
 
 Arena may give each chat its own branch. Treat that as intentional isolation, not as a shared working tree:
