@@ -759,9 +759,10 @@ pub struct Mouse {
     pub down: bool,
     /// Wheel notches, + = up (zoom in).
     pub wheel: i32,
-    /// The sequence ID of a direct phone tap whose mouse-down is requested now.
-    /// It is diagnostic only; no touch position is included.
+    /// The sequence ID of a direct phone tap being routed this frame.
     pub phone_tap_id: Option<u64>,
+    /// The tapped point, normalised to the screen, for the phone-list hit test.
+    pub phone_tap_at: Option<Pos2>,
     /// A new phone gesture or phone close ended the previous tap correlation.
     pub phone_context_reset: bool,
     /// The menu's keys held, by [`MenuKey`].
@@ -852,6 +853,9 @@ pub struct Touch {
     /// mouse-down is sent, replaced, or expires.
     phone_tap_seq: u64,
     phone_tap_pending: Option<PendingPhoneTap>,
+    /// The active mouse click still belongs to this phone tap. The runtime can
+    /// suppress its remaining hold once it routes the tap through a list hit-test.
+    phone_tap_click: Option<PendingPhoneTap>,
     phone_context_reset_pending: bool,
     /// If the touch trace ring evicts an event, the report says how many.
     phone_touch_events_dropped: u64,
@@ -862,6 +866,7 @@ struct PendingPhoneTap {
     sequence: u64,
     from: Instant,
     until: Instant,
+    position: Pos2,
 }
 
 /// Two fingers in the pause menu: how far apart they were last and the
@@ -954,6 +959,7 @@ impl Touch {
             phone_touch_events: VecDeque::new(),
             phone_tap_seq: 0,
             phone_tap_pending: None,
+            phone_tap_click: None,
             phone_context_reset_pending: false,
             phone_touch_events_dropped: 0,
         }
@@ -1015,6 +1021,20 @@ impl Touch {
             self.record_phone_touch_diagnostic(format!(
                 "phone_screen tap_seq_id={} outcome={outcome}",
                 pending.sequence
+            ));
+        }
+        self.phone_tap_click = None;
+    }
+
+    /// The runtime selected a phone-list row from this tap. Its one-frame
+    /// mouse-down was replaced by a gamepad confirm; cancel the rest of that
+    /// short click so a later frame cannot send the old mouse-down after all.
+    pub fn suppress_phone_tap_mouse(&mut self, sequence: u64) {
+        if self.phone_tap_click.is_some_and(|pending| pending.sequence == sequence) {
+            self.click = None;
+            self.phone_tap_click = None;
+            self.record_phone_touch_diagnostic(format!(
+                "phone_screen tap_seq_id={sequence} outcome=direct_selection_mouse_suppressed"
             ));
         }
     }
@@ -2055,10 +2075,10 @@ impl Touch {
         let wheel = self.wheel.trunc();
         self.wheel -= wheel;
         let at = self.mouse_at.map(|p| pos2(p.x / self.screen.x, p.y / self.screen.y));
-        let phone_tap_id = match self.phone_tap_pending {
+        let phone_tap = match self.phone_tap_pending {
             Some(pending) if self.click == Some((pending.from, pending.until)) && down && now < pending.until => {
                 self.phone_tap_pending = None;
-                Some(pending.sequence)
+                Some(pending)
             }
             Some(pending) if self.click != Some((pending.from, pending.until)) => {
                 self.cancel_pending_phone_tap("cancelled_click_replaced");
@@ -2070,8 +2090,21 @@ impl Touch {
             }
             _ => None,
         };
+        if self.phone_tap_click.is_some_and(|active| !down || self.click != Some((active.from, active.until))) {
+            self.phone_tap_click = None;
+        }
+        if let Some(pending) = phone_tap {
+            self.phone_tap_click = Some(pending);
+        }
+        let phone_tap_id = phone_tap.map(|pending| pending.sequence);
+        let phone_tap_at = phone_tap.map(|pending| {
+            pos2(
+                pending.position.x / self.screen.x.max(1.0),
+                pending.position.y / self.screen.y.max(1.0),
+            )
+        });
         let phone_context_reset = std::mem::take(&mut self.phone_context_reset_pending);
-        Mouse { at, down, wheel: wheel as i32, phone_tap_id, phone_context_reset, keys }
+        Mouse { at, down, wheel: wheel as i32, phone_tap_id, phone_tap_at, phone_context_reset, keys }
     }
 
     pub fn finger_motion(&mut self, id: u64, x: f32, y: f32) {
@@ -2314,17 +2347,16 @@ impl Touch {
             Some(Finger::DebugEdit { .. }) => {}
             Some(Finger::Pinch(_)) => self.two = None,
             Some(Finger::Phone { origin, at, steps: 0 }) if origin.distance(at) <= TAP_SLOP * self.scale => {
-                // Emit a mouse click at the screen point. This click can
-                // reach the game's accept path, but the phone movie's current
-                // selection is not changed here; direct slot selection needs
-                // a separate bridge. Do not synthesize a gamepad South press.
+                // Keep the exact screen point with the click so the runtime
+                // can hit-test a supported phone list before choosing whether
+                // to send the mouse-down or a direct selection confirm.
                 let from = Instant::now();
                 let until = from + MIN_PRESS;
                 self.click = Some((from, until));
                 self.phone_tap_seq = self.phone_tap_seq.wrapping_add(1).max(1);
                 let tap_id = self.phone_tap_seq;
                 self.cancel_pending_phone_tap("superseded_by_new_tap");
-                self.phone_tap_pending = Some(PendingPhoneTap { sequence: tap_id, from, until });
+                self.phone_tap_pending = Some(PendingPhoneTap { sequence: tap_id, from, until, position: at });
                 self.record_phone_touch_diagnostic(format!(
                     "phone_screen tap_seq_id={tap_id} gesture=tap outcome=queued_for_mouse_down"
                 ));

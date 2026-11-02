@@ -296,9 +296,16 @@ pub fn phone_movie_diagnostics() -> Vec<String> {
     script_assets::phone_movie_diagnostics()
 }
 
-/// Tag whether a direct phone tap's mouse-down was actually sent to the game.
-pub fn note_phone_touch_tap(tap_id: u64, forwarded: bool) {
-    script_assets::note_phone_touch_tap(tap_id, forwarded);
+/// The selected row under a phone tap, if it falls on a supported list view.
+/// Returns the movie view and its zero-based current-selection value.
+pub fn phone_touch_selection_target(x: f32, y: f32, aspect: f32) -> Option<(i32, i32)> {
+    script_assets::phone_touch_selection_target(x, y, aspect)
+}
+
+/// Record whether a direct phone tap was sent as a mouse-down or routed to a
+/// list selection and confirm.
+pub fn note_phone_touch_tap(tap_id: u64, forwarded: bool, direct_selection: Option<(i32, i32)>) {
+    script_assets::note_phone_touch_tap(tap_id, forwarded, direct_selection);
 }
 
 /// End phone-tap correlation when a new phone gesture, close, or touch-mode

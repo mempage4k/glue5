@@ -1202,7 +1202,9 @@ fn the_phone_screen_emits_pointer_clicks_and_keeps_swipe_navigation() {
     let click = t.take_mouse();
     assert!(click.down, "a tap queues a mouse click at that point");
     assert_eq!(click.phone_tap_id, Some(1), "the direct phone tap keeps its ID to the requested mouse-down");
-    assert_eq!(t.gamepad().buttons & button::SOUTH, 0, "the touch layer does not synthesize gamepad Select");
+    let tap_at = click.phone_tap_at.expect("the exact tap point accompanies its sequence ID");
+    assert!((tap_at.x - x).abs() < 1.0e-6 && (tap_at.y - y).abs() < 1.0e-6);
+    assert_eq!(t.gamepad().buttons & button::SOUTH, 0, "the runtime, not the touch layer, decides whether Select is needed");
     assert_eq!(t.gamepad().left, [0.0, 0.0]);
 
     t.finger_down(2, x, y);
@@ -1219,6 +1221,26 @@ fn the_phone_screen_emits_pointer_clicks_and_keeps_swipe_navigation() {
     assert_eq!(swipe_mouse.phone_tap_id, None, "a swipe does not get a direct-tap ID");
     assert_eq!(t.gamepad().buttons & button::SOUTH, 0, "a swipe does not press gamepad Select");
     assert_eq!(t.look, Vec2::ZERO, "nor turns the camera");
+}
+
+#[test]
+fn direct_phone_selection_suppresses_the_remainder_of_its_mouse_click() {
+    let mut t = phone();
+    t.set_context(PlayerContext { phone: true, ..context(Activity::OnFoot) });
+    t.set_game(Vec::new(), Some(phone_at(t.screen.x / t.screen.y)));
+    let (x, y) = at(&t, t.phone.unwrap().center());
+    t.finger_down(1, x, y);
+    t.take_mouse();
+    t.finger_up(1);
+    let click = t.take_mouse();
+    assert!(click.down);
+    let tap_id = click.phone_tap_id.expect("the direct tap has a sequence ID");
+
+    t.suppress_phone_tap_mouse(tap_id);
+    assert!(!t.take_mouse().down, "the remaining short click cannot be forwarded on a later frame");
+    assert!(t.phone_touch_diagnostics().iter().any(|event| {
+        event.contains("tap_seq_id=1 outcome=direct_selection_mouse_suppressed")
+    }));
 }
 
 #[test]
@@ -1272,7 +1294,7 @@ fn a_phone_tap_id_expires_with_its_click_and_is_not_attached_to_a_replacement() 
     let from = Instant::now() - Duration::from_secs(1);
     let until = from + MIN_PRESS;
     t.click = Some((from, until));
-    t.phone_tap_pending = Some(PendingPhoneTap { sequence: 17, from, until });
+    t.phone_tap_pending = Some(PendingPhoneTap { sequence: 17, from, until, position: Pos2::ZERO });
 
     let expired = t.take_mouse();
     assert!(!expired.down);
@@ -1283,7 +1305,7 @@ fn a_phone_tap_id_expires_with_its_click_and_is_not_attached_to_a_replacement() 
 
     let from = Instant::now();
     let until = from + MIN_PRESS;
-    t.phone_tap_pending = Some(PendingPhoneTap { sequence: 18, from, until });
+    t.phone_tap_pending = Some(PendingPhoneTap { sequence: 18, from, until, position: Pos2::ZERO });
     t.click = Some((from + Duration::from_secs(1), until + Duration::from_secs(1)));
 
     let replaced = t.take_mouse();
