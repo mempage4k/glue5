@@ -984,6 +984,7 @@ impl App {
                 });
         if show != self.touch_shown {
             self.touch_shown = show;
+            glue5_runtime::clear_phone_touch_context("touch_controls_changed");
             self.touch.clear();
             #[cfg(target_os = "android")]
             if !show
@@ -1061,6 +1062,10 @@ impl App {
             }
             let look = self.touch.take_look();
             let mouse = self.touch.take_mouse();
+            if mouse.phone_context_reset {
+                glue5_runtime::clear_phone_touch_context("new_phone_interaction_or_close");
+            }
+            let mut phone_tap_forwarded = false;
             if let Some(game) = &self.game
                 && let Some(input) = &game.input
             {
@@ -1087,11 +1092,9 @@ impl App {
                         }
                     }
                 }
-                if let Some(tap_id) = mouse.phone_tap_id {
-                    glue5_runtime::note_phone_touch_tap(tap_id);
-                }
                 if mouse.down != self.touch_mouse.down {
                     input.mouse_button(mouse::LEFT, mouse.down);
+                    phone_tap_forwarded = mouse.down && mouse.phone_tap_id.is_some();
                 }
                 if mouse.wheel != 0 {
                     input.mouse_wheel(mouse.wheel);
@@ -1102,6 +1105,11 @@ impl App {
                     }
                 }
                 self.touch_mouse = mouse;
+            }
+            if let Some(tap_id) = mouse.phone_tap_id {
+                // This event follows input.mouse_button, so it distinguishes a
+                // queued click from the mouse-down actually sent this frame.
+                glue5_runtime::note_phone_touch_tap(tap_id, phone_tap_forwarded);
             }
         }
         // The game's rumble while the touch controls play; stopped as soon as

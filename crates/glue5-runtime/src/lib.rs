@@ -296,9 +296,15 @@ pub fn phone_movie_diagnostics() -> Vec<String> {
     script_assets::phone_movie_diagnostics()
 }
 
-/// Tag the mouse-down that carries a direct touch on the game phone.
-pub fn note_phone_touch_tap(tap_id: u64) {
-    script_assets::note_phone_touch_tap(tap_id);
+/// Tag whether a direct phone tap's mouse-down was actually sent to the game.
+pub fn note_phone_touch_tap(tap_id: u64, forwarded: bool) {
+    script_assets::note_phone_touch_tap(tap_id, forwarded);
+}
+
+/// End phone-tap correlation when a new phone gesture, close, or touch-mode
+/// transition makes later phone calls unrelated to the old tap.
+pub fn clear_phone_touch_context(reason: &'static str) {
+    script_assets::clear_phone_touch_context(reason);
 }
 
 /// A running game.

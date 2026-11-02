@@ -412,7 +412,7 @@ fn append_phone_movie_diagnostics(report: &mut String, events: &[String]) {
 
     let _ = writeln!(
         report,
-        "\nRecent phone selection/action trace (tap IDs correlate touch, selection return and app-script requests; no pointer hit-test is inferred):"
+        "\nRecent phone selection/action trace (forwarded=true means the click's mouse-down was sent, not consumed; nearby phone events are time-correlated only; selection is valid only at ready=1, REQUEST_SCRIPT does not prove the app appeared, and no pointer hit-test is inferred):"
     );
     if events.is_empty() {
         report.push_str("(no phone selection/action events recorded)\n");
@@ -1257,6 +1257,10 @@ mod tests {
             &mut report,
             &["+13ms phone_virtual_key key=Back phase=down".to_owned()],
         );
+        append_phone_movie_diagnostics(
+            &mut report,
+            &["+14ms tap_seq_id=1 selection=7 ready=1".to_owned()],
+        );
         append_perf_diagnostics(
             &mut report,
             &glue5_gpu::perf::Snapshot {
@@ -1275,6 +1279,10 @@ mod tests {
         assert!(report.contains("pad buttons=[L2,R2]"));
         assert!(report.contains("Recent phone touchscreen gestures and virtual keys"));
         assert!(report.contains("phone_virtual_key key=Back phase=down"));
+        assert!(report.contains("selection is valid only at ready=1"));
+        assert!(report.contains("REQUEST_SCRIPT does not prove the app appeared"));
+        assert!(report.contains("no pointer hit-test is inferred"));
+        assert!(report.contains("tap_seq_id=1 selection=7 ready=1"));
         assert!(report.contains("p95=30.00ms"));
         assert!(report.contains("tracked GPU memory=1.0 MiB"));
     }

@@ -759,9 +759,11 @@ pub struct Mouse {
     pub down: bool,
     /// Wheel notches, + = up (zoom in).
     pub wheel: i32,
-    /// The sequence ID of a direct phone tap whose mouse-down is this frame.
+    /// The sequence ID of a direct phone tap whose mouse-down is requested now.
     /// It is diagnostic only; no touch position is included.
     pub phone_tap_id: Option<u64>,
+    /// A new phone gesture or phone close ended the previous tap correlation.
+    pub phone_context_reset: bool,
     /// The menu's keys held, by [`MenuKey`].
     pub keys: [bool; 6],
 }
@@ -846,10 +848,20 @@ pub struct Touch {
     /// Phone-screen gestures and the separate virtual phone keys, without
     /// recording finger coordinates.
     phone_touch_events: VecDeque<String>,
-    /// Direct phone taps, identified from touch lift until their mouse-down
-    /// reaches the game input block.
+    /// Direct phone taps, identified from touch lift until their matching
+    /// mouse-down is sent, replaced, or expires.
     phone_tap_seq: u64,
-    phone_tap_pending: Option<u64>,
+    phone_tap_pending: Option<PendingPhoneTap>,
+    phone_context_reset_pending: bool,
+    /// If the touch trace ring evicts an event, the report says how many.
+    phone_touch_events_dropped: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingPhoneTap {
+    sequence: u64,
+    from: Instant,
+    until: Instant,
 }
 
 /// Two fingers in the pause menu: how far apart they were last and the
@@ -942,6 +954,8 @@ impl Touch {
             phone_touch_events: VecDeque::new(),
             phone_tap_seq: 0,
             phone_tap_pending: None,
+            phone_context_reset_pending: false,
+            phone_touch_events_dropped: 0,
         }
     }
 
@@ -954,7 +968,15 @@ impl Touch {
     /// Recent phone-screen gestures and virtual phone-key transitions. This
     /// is separate from gamepad output; it records no coordinates or finger IDs.
     pub fn phone_touch_diagnostics(&self) -> Vec<String> {
-        self.phone_touch_events.iter().cloned().collect()
+        let mut events = self.phone_touch_events.iter().cloned().collect::<Vec<_>>();
+        if self.phone_touch_events_dropped != 0 {
+            events.push(format!(
+                "+{}ms phone_touch_trace dropped={}",
+                glue5_runtime::diagnostics_elapsed_ms(),
+                self.phone_touch_events_dropped
+            ));
+        }
+        events
     }
 
     fn phone_key_name(index: usize) -> &'static str {
@@ -983,8 +1005,18 @@ impl Touch {
         const LIMIT: usize = 64;
         if self.phone_touch_events.len() == LIMIT {
             self.phone_touch_events.pop_front();
+            self.phone_touch_events_dropped = self.phone_touch_events_dropped.saturating_add(1);
         }
         self.phone_touch_events.push_back(format!("+{}ms {line}", glue5_runtime::diagnostics_elapsed_ms()));
+    }
+
+    fn cancel_pending_phone_tap(&mut self, outcome: &'static str) {
+        if let Some(pending) = self.phone_tap_pending.take() {
+            self.record_phone_touch_diagnostic(format!(
+                "phone_screen tap_seq_id={} outcome={outcome}",
+                pending.sequence
+            ));
+        }
     }
 
     fn record_gamepad(&mut self, pad: &Gamepad) {
@@ -1079,6 +1111,8 @@ impl Touch {
         let phone_closed = self.context.phone && !context.phone;
         self.context = context;
         if phone_opened || phone_closed {
+            self.phone_context_reset_pending = true;
+            self.cancel_pending_phone_tap("cancelled_phone_state_change");
             self.record_diagnostic(format!("phone out: {}", context.phone));
         }
         if context.phone {
@@ -1113,10 +1147,8 @@ impl Touch {
             self.pressed &= !released;
             self.pressed_inputs.clear();
             self.click = None;
-            self.phone_tap_pending = None;
         }
         if phone_closed {
-            self.phone_tap_pending = None;
             // The phone's keys are gone with it: one still held (Back, say)
             // must not go on pressing in play under its old name. Keep the
             // release reason in the semantic trace if Back itself closed it.
@@ -1843,6 +1875,10 @@ impl Touch {
             Finger::Button { key: Key::Phone(index), .. } => Some(index),
             _ => None,
         };
+        if matches!(finger, Finger::Phone { .. }) || phone_key.is_some() {
+            self.phone_context_reset_pending = true;
+            self.cancel_pending_phone_tap("cancelled_by_new_phone_gesture");
+        }
         if matches!(finger, Finger::Phone { .. }) {
             // Forward the actual screen point through the mouse-input path.
             // The inspected phone scripts/movies do not establish that this
@@ -2019,8 +2055,23 @@ impl Touch {
         let wheel = self.wheel.trunc();
         self.wheel -= wheel;
         let at = self.mouse_at.map(|p| pos2(p.x / self.screen.x, p.y / self.screen.y));
-        let phone_tap_id = if down { self.phone_tap_pending.take() } else { None };
-        Mouse { at, down, wheel: wheel as i32, phone_tap_id, keys }
+        let phone_tap_id = match self.phone_tap_pending {
+            Some(pending) if self.click == Some((pending.from, pending.until)) && down && now < pending.until => {
+                self.phone_tap_pending = None;
+                Some(pending.sequence)
+            }
+            Some(pending) if self.click != Some((pending.from, pending.until)) => {
+                self.cancel_pending_phone_tap("cancelled_click_replaced");
+                None
+            }
+            Some(pending) if now >= pending.until => {
+                self.cancel_pending_phone_tap("expired_before_mouse_down");
+                None
+            }
+            _ => None,
+        };
+        let phone_context_reset = std::mem::take(&mut self.phone_context_reset_pending);
+        Mouse { at, down, wheel: wheel as i32, phone_tap_id, phone_context_reset, keys }
     }
 
     pub fn finger_motion(&mut self, id: u64, x: f32, y: f32) {
@@ -2268,12 +2319,14 @@ impl Touch {
                 // selection is not changed here; direct slot selection needs
                 // a separate bridge. Do not synthesize a gamepad South press.
                 let from = Instant::now();
-                self.click = Some((from, from + MIN_PRESS));
+                let until = from + MIN_PRESS;
+                self.click = Some((from, until));
                 self.phone_tap_seq = self.phone_tap_seq.wrapping_add(1).max(1);
                 let tap_id = self.phone_tap_seq;
-                self.phone_tap_pending = Some(tap_id);
+                self.cancel_pending_phone_tap("superseded_by_new_tap");
+                self.phone_tap_pending = Some(PendingPhoneTap { sequence: tap_id, from, until });
                 self.record_phone_touch_diagnostic(format!(
-                    "phone_screen tap_seq_id={tap_id} gesture=tap outcome=mouse_click"
+                    "phone_screen tap_seq_id={tap_id} gesture=tap outcome=queued_for_mouse_down"
                 ));
                 if self.haptics {
                     haptics::tap();
@@ -2374,7 +2427,8 @@ impl Touch {
         self.locked_stick = Vec2::ZERO;
         self.sprint_since = None;
         self.click = None;
-        self.phone_tap_pending = None;
+        self.phone_context_reset_pending = true;
+        self.cancel_pending_phone_tap("cancelled_touch_clear");
         self.key_until = [None; 6];
         self.wheel = 0.0;
         self.steps = 0.0;

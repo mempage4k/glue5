@@ -175,7 +175,9 @@ pub(crate) unsafe extern "C" fn scaleform_call_method(
             bar_method(mem, movie, method, args, count);
         }
     }
-    crate::script_assets::trace_phone_scaleform_call(env, movie, name, args, count);
+    // Keep both `instantly` variants observable; the phone trace filters to
+    // app dispatch calls and records the flag rather than assuming duplicates.
+    crate::script_assets::trace_phone_scaleform_call(env, movie, name, args, count, instantly);
     unsafe { orig::scaleform_call_method(env, ret, movie, child, base, name, args, count, instantly, store, ret_id, unique) }
 }
 
