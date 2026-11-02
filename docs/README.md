@@ -22,6 +22,8 @@
 
 - [Android performance: Galaxy S21 Plus](android-performance-s21.md): device-specific hypotheses, verification gates and measurements; static review only until validated on hardware.
 - [Touch, HUD and benchmark roadmap](roadmap-touch-hud-benchmarks.md): scoped implementation backlog and progress for touch/HUD and GLUE 5 benchmarks.
+- [Windows streaming server and audio mirror audit](windows-stream-audio-audit.md): a supplied Windows audit snapshot, repository streaming behavior, and open questions for optional character-voice downloads.
+- [Streaming flow map](streaming-flow.md): source map from server announcement and discovery to client cache and engine reads; includes the current Android-only support note.
 - [Project diary](project-diary.md): temporary chronological notes; not the source of truth for durable design decisions or backlogs.
 
 **Conventions and governance**
@@ -58,6 +60,8 @@ of truth for `main` until they land there.
 | `streaming-flow.md` | `arena/57946d80-glue5` `[SERV]` | Branch absent from the remote; changes not committed |
 | `windows-stream-audio-audit.md` | `arena/57946d80-glue5` `[SERV]` | Windows snapshot supplied by another chat, **not verified** by that agent |
 | `validation-s21.md` | `[PERF]`, local commit `710d364` | **Not published**: `arena/b8d177aa-glue5` is absent from the remote |
+
+**[SERV] status update (2026-11-02):** The table above is a snapshot from before the server/streaming work was committed and pushed. `streaming-flow.md` and `windows-stream-audio-audit.md` are now tracked on `arena/57946d80-glue5` at `55badd4`; their links are listed above. The Windows audit remains a supplied snapshot, not independently verified by that chat. At the time of this update, the PR to `main` is pending.
 
 `menu-sfx.md` and `project-diary.md` do exist in `main`, but the `[MENU]`
 branch carries different versions; see its index before merging either.

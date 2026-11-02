@@ -34,6 +34,10 @@ from the repository's **Security** tab.
 
 Use the GLU team and `P-GLU-1` project in Linear for task scope, priorities, decisions, blockers, acceptance criteria and handoffs. Search for an existing issue before creating one, and keep its status and comments aligned with verified work. Use [the Linear workflow](docs/linear-workflow.md) for the detailed coordination and AI-identification rules. GitHub remains authoritative for code, branches, commits, pull requests and CI results.
 
+## Project tracking and AI agents
+
+Use the GLU team and `P-GLU-1` project in Linear for task scope, priorities, decisions, blockers, acceptance criteria and handoffs. Search for an existing issue before creating one, and keep its status and comments aligned with verified work. Use [the Linear workflow](docs/linear-workflow.md) for the detailed coordination and AI-identification rules. GitHub remains authoritative for code, branches, commits, pull requests and CI results.
+
 ## Making a change
 
 1. Read [Building from source](docs/building.md) to set up the toolchain,
