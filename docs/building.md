@@ -7,11 +7,18 @@ it.
 ## Quick start
 
 ```sh
-git clone https://github.com/mempage4k/glue5
+git clone https://github.com/luizhegner/glue5
 cd glue5
 ln -s /path/to/your/game game   # b/<build>/game.wasm, b/<build>/shaders, data
 mise run play                   # the first build compiles ~1 GB of generated C
 ```
+
+Before the first build, run `git submodule update --init` (the
+`third_party/wabt` submodule is empty in a fresh clone) and `mise run
+setup`, which prepares the patched wgpu/wgpu-core/wgpu-hal/
+sp-fidelity sources that `[patch.crates-io]` in `Cargo.toml` points
+at. `game.wasm` is not in the repository: it comes from your own
+files, or from the private draft release in CI (`GLUE5_GAME_DIR`).
 
 `game.wasm` is translated to C with [wasm2c] at build time, compiled with
 the platform's C compiler and linked into a Rust host that provides the

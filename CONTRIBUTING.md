@@ -9,11 +9,13 @@ GLUE 5 contains none of the game's code or assets, and it must stay that
 way. Never commit, attach or link `game.wasm`, the game's data, shaders or
 anything extracted from them, in the code, an issue or a pull request. This
 also goes for logs and screenshots: check them for personal information,
-such as your user name in a file path.
+such as your user name in a file path. Bundled media whose provenance is
+under review is listed in [Asset provenance](docs/asset-provenance.md).
 
 ## Reporting a bug
 
-Open an issue with:
+GitHub Issues are disabled in this repository. Record bugs in the Linear
+project **GLUE 5 — GTA V para Android** (team `GLU`), with:
 
 - the device, its OS version and GPU (on Android, the phone model and its
   chip);
@@ -23,8 +25,10 @@ Open an issue with:
   [user folder](docs/getting-started.md#where-your-data-is) (on Android,
   `adb logcat` around the problem).
 
-For a security problem (for example in online play or the Studio), don't
-open an issue: report it privately from the repository's **Security** tab.
+Keep **implemented**, **tested** and **validated on the device** separate: a
+green CI check is not device validation. For a security problem (for example
+in online play or the Studio), don't record it publicly: report it privately
+from the repository's **Security** tab.
 
 ## Project tracking and AI agents
 
@@ -34,15 +38,29 @@ Use the GLU team and `P-GLU-1` project in Linear for task scope, priorities, dec
 
 1. Read [Building from source](docs/building.md) to set up the toolchain,
    and the [design notes](docs/design.md) for the part you are changing.
-2. Branch from `next`, where development happens, and open the pull request
-   against `next`. `main` only receives `next` once it has been tested.
+2. Branch from `main` — there is no `next` branch — and open the pull request
+   against `main`. Integration into `main` is centralized and gated on the
+   Android build: see [AI_GUIDE.md](AI_GUIDE.md). Each area works on its own
+   branch; nothing is pushed, merged or published without explicit
+   authorization. Shared files (`app.rs`, `ui.rs`, `ui/pages.rs`,
+   `settings.rs`, `imports.rs`, `docs/project-diary.md`) need notice before
+   edits.
 3. Keep each commit to one change, with a subject that says what it does in
    plain words, prefixed by the area: `Renderer: ...`, `Android: ...`,
-   `Docs: ...` (`git log --oneline` shows plenty).
+   `Docs: ...` (`git log --oneline` shows plenty). Commits containing
+   AI-produced material carry the `AI-Contribution:` trailer defined in the
+   [identification protocol](docs/protocolo-identificacao.md).
 4. Before opening it, run `mise exec -- cargo clippy` (no new warnings) and
-   `mise run test`, and build every platform your change touches. For a
-   renderer change, compare screenshots before and after (`mise run headless
-   -- --help`: `--shots`).
+   `mise run test` (`cargo test --workspace`), and build every platform your
+   change touches. CI does **not** run the whole workspace: see
+   [CI coverage](docs/ci-coverage.md). For a renderer change, compare
+   screenshots before and after (`mise run headless -- --help`: `--shots`).
+
+## Support scope
+
+This release targets only the Samsung Galaxy S21 Plus (arm64, Android 11 or
+later). Historical build tools and documentation for other platforms remain
+in the repository, but they are not supported or validated.
 
 ## How the code is written
 
