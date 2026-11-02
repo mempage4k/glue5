@@ -16,8 +16,8 @@ Base: `main` / `origin/main` = `af1158b`. Repositório: `luizhegner/glue5`.
 | Base | `main` | `af1158b` | publicada | PR #12 mira aqui |
 | `[TOUCH]` | `arena/107599ac-glue5` | PR #12 (11 à frente / 0 atrás) | publicada; **PR #12 aberto**, 3 checks verdes | Edição de `docs/roadmap-touch-hud-benchmarks.md` **não commitada** |
 | `[MENU]` | `arena/4f5cc306-glue5` | remota `a2e5bfe`; local `84befb0` | remota publicada; `84befb0` **local, sem push** | 7 docs + 7 CSVs branch-only; índice em `docs/documentacao-branch-menu.md` |
-| `[SERV]` | `arena/57946d80-glue5` | `af1158b` (commit base) | **ausente do remote** | 2 docs novos + `docs/README.md` + diário, **não commitados** |
-| `[PERF]` | `arena/b8d177aa-glue5` (citada na GLU-26) | 9 commits locais | **ausente do remote** | 28 arquivos, +1251/−24; `docs/validation-s21.md` no commit local `710d364` |
+| `[SERV]` | `arena/57946d80-glue5` | commit local `313075f` | **ausente do remote** | 2 docs + `docs/README.md` + diário commitados localmente, **sem push** |
+| `[PERF]` | `arena/b8d177aa-glue5` (citada na GLU-26) | 9 commits **recriados** | **ausente do remote** | 28 arquivos, +1251/−24; o sandbox re-clonou e apagou os commits originais, que foram refeitos com trailer `AI-Contribution:`; **os SHAs mudaram** |
 | Revisão geral | `arena/f2f782ce-glue5` | commits locais `6f6018d` + esta rodada | **sem push** | Documentação/governança transversal apenas |
 
 `git ls-remote --heads origin` confirma que `arena/57946d80-glue5` e
@@ -45,9 +45,11 @@ commit local). Momentos diferentes e chats ativos.
 | `docs/project-diary.md` | `[MENU]`, `[PERF]`, `[SERV]` e `main` — append × append |
 | `docs/menu-sfx.md` | Existe em `main` e na `[MENU]` em versões divergentes |
 
-O `[PERF]` **não respondeu** à pergunta de ownership (f); o `[SERV]` avisou que
-coordenará com `[MENU]` antes de tocar `ui/pages.rs`. Nada foi inferido para
-preencher essas lacunas.
+O `[PERF]` confirmou que **nenhum dos cinco arquivos é exclusivamente seu** e
+reproduziu a medição da revisão geral (2/5/1/0/0 para `[MENU]`). Acrescentou
+um dado que faltava: a branch `[TOUCH]` (`arena/107599ac-glue5`) mexe nos
+**cinco** arquivos e é quem mais altera `settings.rs` e `imports.rs`. O
+`[SERV]` avisou na GLU-26 antes de editar `docs/README.md` e o diário.
 
 ## 3. Conflitos conhecidos
 
@@ -99,7 +101,11 @@ disparado por esta revisão.**
 
 ## 6. Riscos operacionais
 
-- Trabalho não commitado em dois chats pode se perder entre sessões do sandbox.
+- **Já aconteceu:** o sandbox do `[PERF]` re-clonou o repositório e apagou 9
+  commits; só o working tree sobreviveu. Os commits foram recriados com o mesmo
+  diff, mas os SHAs mudaram. **Commits locais não são armazenamento seguro** —
+  a publicação (autorizada pelo dono) é o que protege o trabalho.
+- Trabalho não commitado do `[TOUCH]` pode se perder entre sessões do sandbox.
 - O `[MENU]` informou ao dono que normalmente publica a cada entrega, mas
   deixou `84befb0` local por causa da instrução de não-fazer-push.
 - Três formatos de identificação de IA circulam; dois colocam `Arena.ai` no
