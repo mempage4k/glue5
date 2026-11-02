@@ -218,14 +218,16 @@ fn record_event(root: &Path, event: &str) {
 }
 
 /// A bounded support snapshot of import/save probes, runtime settings,
-/// virtual gamepad transitions, performance data, engine output, and the GPU
-/// census. It never reads save-file contents or records raw touch coordinates.
+/// virtual gamepad transitions, phone-screen gestures and virtual keys,
+/// performance data, engine output, and the GPU census. It never reads
+/// save-file contents or records raw touch coordinates.
 pub fn diagnostics_report(
     user_dir: &Path,
     source: crate::settings::Source,
     game_dir: Option<&Path>,
     settings: Option<&crate::settings::Settings>,
     touch_events: &[String],
+    phone_touch_events: &[String],
 ) -> String {
     use std::fmt::Write as _;
 
@@ -258,7 +260,9 @@ pub fn diagnostics_report(
     let _ = writeln!(report, "Save root: {}", saves.display());
     append_settings(&mut report, settings);
     append_touch_diagnostics(&mut report, touch_events);
+    append_phone_touch_diagnostics(&mut report, phone_touch_events);
     append_input_diagnostics(&mut report, &glue5_runtime::input::diagnostics());
+    append_phone_movie_diagnostics(&mut report, &glue5_runtime::phone_movie_diagnostics());
     append_perf_diagnostics(&mut report, &glue5_gpu::perf::diagnostics_snapshot());
     let gpu_diagnostics = glue5_gpu::census::diagnostics_snapshot();
     append_gpu_census(&mut report, gpu_diagnostics.as_ref());
@@ -379,12 +383,41 @@ fn append_touch_diagnostics(report: &mut String, events: &[String]) {
     }
 }
 
+fn append_phone_touch_diagnostics(report: &mut String, events: &[String]) {
+    use std::fmt::Write as _;
+
+    let _ = writeln!(report, "\nRecent phone touchscreen gestures and virtual keys (no coordinates; common +ms timeline):");
+    if events.is_empty() {
+        report.push_str("(no phone-screen gestures or virtual phone-key transitions recorded)\n");
+        return;
+    }
+    for event in events {
+        let _ = writeln!(report, "{event}");
+    }
+}
+
 fn append_input_diagnostics(report: &mut String, events: &[String]) {
     use std::fmt::Write as _;
 
     let _ = writeln!(report, "\nRecent phone/input-device transitions (from the game):");
     if events.is_empty() {
         report.push_str("(no phone or input-device transitions recorded)\n");
+        return;
+    }
+    for event in events {
+        let _ = writeln!(report, "{event}");
+    }
+}
+
+fn append_phone_movie_diagnostics(report: &mut String, events: &[String]) {
+    use std::fmt::Write as _;
+
+    let _ = writeln!(
+        report,
+        "\nRecent phone selection/action trace (forwarded=true means the click's mouse-down was sent, not consumed; nearby phone events are time-correlated only; selection is valid only at ready=1, REQUEST_SCRIPT does not prove the app appeared, and no pointer hit-test is inferred):"
+    );
+    if events.is_empty() {
+        report.push_str("(no phone selection/action events recorded)\n");
         return;
     }
     for event in events {
@@ -743,11 +776,12 @@ pub fn copy_diagnostics(
     game_dir: Option<&Path>,
     settings: &crate::settings::Settings,
     touch_events: &[String],
+    phone_touch_events: &[String],
 ) -> Result<()> {
     use jni::objects::{JObject, JValue};
 
     glue5_runtime::flush_save_diagnostics();
-    let report = diagnostics_report(user_dir, source, game_dir, Some(settings), touch_events);
+    let report = diagnostics_report(user_dir, source, game_dir, Some(settings), touch_events, phone_touch_events);
     crate::jni_util::with_activity(|env, class| {
         let report = JObject::from(env.new_string(report).context("encoding support report")?);
         env.call_static_method(
@@ -1143,7 +1177,7 @@ mod tests {
         assert!(results[0].as_ref().unwrap_err().to_string().contains("cannot open selected file"));
         assert!(!errors.join("save-123.txt").exists());
         assert!(
-            diagnostics_report(&temp.0, crate::settings::Source::Server, None, None, &[])
+            diagnostics_report(&temp.0, crate::settings::Source::Server, None, None, &[], &[])
                 .contains("cannot open selected file")
         );
         assert!(install_ready(&temp.0, None).is_empty());
@@ -1220,7 +1254,15 @@ mod tests {
         let settings = crate::settings::Settings::default();
         let mut report = String::new();
         append_settings(&mut report, Some(&settings));
-        append_touch_diagnostics(&mut report, &["pad buttons=[L2,R2] triggers=(1.00,1.00)".to_owned()]);
+        append_touch_diagnostics(&mut report, &["+12ms pad buttons=[L2,R2] triggers=(1.00,1.00)".to_owned()]);
+        append_phone_touch_diagnostics(
+            &mut report,
+            &["+13ms phone_virtual_key key=Back phase=down".to_owned()],
+        );
+        append_phone_movie_diagnostics(
+            &mut report,
+            &["+14ms tap_seq_id=1 selection=7 ready=1".to_owned()],
+        );
         append_perf_diagnostics(
             &mut report,
             &glue5_gpu::perf::Snapshot {
@@ -1237,6 +1279,12 @@ mod tests {
         assert!(report.contains("vehicle_steer=Stick"));
         assert!(report.contains("aim_fire=Auto"));
         assert!(report.contains("pad buttons=[L2,R2]"));
+        assert!(report.contains("Recent phone touchscreen gestures and virtual keys"));
+        assert!(report.contains("phone_virtual_key key=Back phase=down"));
+        assert!(report.contains("selection is valid only at ready=1"));
+        assert!(report.contains("REQUEST_SCRIPT does not prove the app appeared"));
+        assert!(report.contains("no pointer hit-test is inferred"));
+        assert!(report.contains("tap_seq_id=1 selection=7 ready=1"));
         assert!(report.contains("p95=30.00ms"));
         assert!(report.contains("tracked GPU memory=1.0 MiB"));
     }
@@ -1271,7 +1319,7 @@ mod tests {
         .unwrap();
 
         let game = user.join("Downloads/game");
-        let report = diagnostics_report(user, crate::settings::Source::Folder, Some(&game), None, &[]);
+        let report = diagnostics_report(user, crate::settings::Source::Folder, Some(&game), None, &[], &[]);
         assert!(report.contains(&format!("App build: {}", crate::version::LABEL)));
         assert!(report.contains("Game source: Folder"));
         assert!(report.contains(&format!("Game directory: {}", game.display())));

@@ -58,10 +58,20 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 
 pub use glue5_game::GAME_BUILD;
+
+/// One monotonic timeline for the support traces from touch, input and Scaleform.
+/// It starts at the first diagnostic event and never records wall-clock time.
+static DIAGNOSTICS_CLOCK: OnceLock<Instant> = OnceLock::new();
+
+/// Milliseconds on the common monotonic timeline used by the support traces.
+pub fn diagnostics_elapsed_ms() -> u128 {
+    DIAGNOSTICS_CLOCK.get_or_init(Instant::now).elapsed().as_millis()
+}
 
 /// The CPU cores the process may use, asked once: on Linux and Android the
 /// standard library reads the cgroup quotas each time, which Android's
@@ -278,6 +288,30 @@ pub fn flush_save_diagnostics() {
     if let Some(runtime) = RUNTIME.get() {
         runtime.vfs.flush_save_trace();
     }
+}
+
+/// The phone movie's recent input and view methods (how the game's own
+/// phone script drove it), for support reports.
+pub fn phone_movie_diagnostics() -> Vec<String> {
+    script_assets::phone_movie_diagnostics()
+}
+
+/// The selected row under a phone tap, if it falls on a supported list view.
+/// Returns the movie view and its zero-based current-selection value.
+pub fn phone_touch_selection_target(x: f32, y: f32, aspect: f32) -> Option<(i32, i32)> {
+    script_assets::phone_touch_selection_target(x, y, aspect)
+}
+
+/// Record whether a direct phone tap was sent as a mouse-down or routed to a
+/// list selection and confirm.
+pub fn note_phone_touch_tap(tap_id: u64, forwarded: bool, direct_selection: Option<(i32, i32)>) {
+    script_assets::note_phone_touch_tap(tap_id, forwarded, direct_selection);
+}
+
+/// End phone-tap correlation when a new phone gesture, close, or touch-mode
+/// transition makes later phone calls unrelated to the old tap.
+pub fn clear_phone_touch_context(reason: &'static str) {
+    script_assets::clear_phone_touch_context(reason);
 }
 
 /// A running game.

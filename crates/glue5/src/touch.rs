@@ -196,13 +196,6 @@ const ICON_FILES: &[(&str, &[u8])] = icons![
 /// The icons' textures, by name.
 type Icons = HashMap<&'static str, egui::TextureHandle>;
 
-/// The support trace's clock: milliseconds since its first line, so a
-/// repeating pattern (the phone cycling, say) shows its rhythm.
-fn diagnostic_clock() -> Instant {
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    *START.get_or_init(Instant::now)
-}
-
 fn load_icons(ctx: &egui::Context) -> Icons {
     ICON_FILES.iter().filter_map(|(name, _)| load_icon(ctx, name).map(|t| (*name, t))).collect()
 }
@@ -665,7 +658,8 @@ const LOOK_GAIN: f32 = 16.0;
 /// tremor stays in the game's dead zone). A mouse's motion would break the
 /// lock instead.
 const LOCKED_SWIPE: f32 = 8.0;
-/// A swipe on the game's phone steps its selection every this many points.
+/// A swipe on the game's phone emits a directional selection step every
+/// this many points; it is navigation, not direct app hit-testing.
 const PHONE_STEP: f32 = 30.0;
 /// The phone button's pulse stands until the game shows the phone out,
 /// or this long (it did not open: the tap may be tried again). Its button
@@ -720,9 +714,10 @@ enum Finger {
     Mouse { origin: Pos2, at: Pos2, since: Instant, drag: Option<Drag> },
     Pinch(Pos2),
     MenuKey(MenuKey),
-    /// On the game's phone: a tap clicks the point under the finger; a
-    /// swipe still steps its selection (where it landed or last stepped,
-    /// where it is, steps made).
+    /// On the game's phone: a tap emits a mouse click at the finger's
+    /// screen point; a swipe emits directional steps (where it landed or
+    /// last stepped, where it is, steps made). Neither is a tapped-slot
+    /// selection by itself.
     Phone { origin: Pos2, at: Pos2, steps: u32 },
     /// On a debug touch area: where the finger is (a tap there does the
     /// area's action when it lifts inside it, or pulsed its button at
@@ -764,6 +759,12 @@ pub struct Mouse {
     pub down: bool,
     /// Wheel notches, + = up (zoom in).
     pub wheel: i32,
+    /// The sequence ID of a direct phone tap being routed this frame.
+    pub phone_tap_id: Option<u64>,
+    /// The tapped point, normalised to the screen, for the phone-list hit test.
+    pub phone_tap_at: Option<Pos2>,
+    /// A new phone gesture or phone close ended the previous tap correlation.
+    pub phone_context_reset: bool,
     /// The menu's keys held, by [`MenuKey`].
     pub keys: [bool; 6],
 }
@@ -845,6 +846,27 @@ pub struct Touch {
     /// support reports. It records outputs, not finger coordinates.
     diagnostic_pad: Option<(u16, [i16; 2], [i16; 2], u8, u8)>,
     diagnostic_events: VecDeque<String>,
+    /// Phone-screen gestures and the separate virtual phone keys, without
+    /// recording finger coordinates.
+    phone_touch_events: VecDeque<String>,
+    /// Direct phone taps, identified from touch lift until their matching
+    /// mouse-down is sent, replaced, or expires.
+    phone_tap_seq: u64,
+    phone_tap_pending: Option<PendingPhoneTap>,
+    /// The active mouse click still belongs to this phone tap. The runtime can
+    /// suppress its remaining hold once it routes the tap through a list hit-test.
+    phone_tap_click: Option<PendingPhoneTap>,
+    phone_context_reset_pending: bool,
+    /// If the touch trace ring evicts an event, the report says how many.
+    phone_touch_events_dropped: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingPhoneTap {
+    sequence: u64,
+    from: Instant,
+    until: Instant,
+    position: Pos2,
 }
 
 /// Two fingers in the pause menu: how far apart they were last and the
@@ -934,6 +956,12 @@ impl Touch {
             two: None,
             diagnostic_pad: None,
             diagnostic_events: VecDeque::new(),
+            phone_touch_events: VecDeque::new(),
+            phone_tap_seq: 0,
+            phone_tap_pending: None,
+            phone_tap_click: None,
+            phone_context_reset_pending: false,
+            phone_touch_events_dropped: 0,
         }
     }
 
@@ -943,6 +971,32 @@ impl Touch {
         self.diagnostic_events.iter().cloned().collect()
     }
 
+    /// Recent phone-screen gestures and virtual phone-key transitions. This
+    /// is separate from gamepad output; it records no coordinates or finger IDs.
+    pub fn phone_touch_diagnostics(&self) -> Vec<String> {
+        let mut events = self.phone_touch_events.iter().cloned().collect::<Vec<_>>();
+        if self.phone_touch_events_dropped != 0 {
+            events.push(format!(
+                "+{}ms phone_touch_trace dropped={}",
+                glue5_runtime::diagnostics_elapsed_ms(),
+                self.phone_touch_events_dropped
+            ));
+        }
+        events
+    }
+
+    fn phone_key_name(index: usize) -> &'static str {
+        match index {
+            0 => "Up",
+            1 => "Down",
+            2 => "Left",
+            3 => "Right",
+            4 => "Select",
+            5 => "Back",
+            _ => "Unknown",
+        }
+    }
+
     /// A line for the support report's touch trace (bounded, no finger
     /// coordinates).
     fn record_diagnostic(&mut self, line: String) {
@@ -950,7 +1004,39 @@ impl Touch {
         if self.diagnostic_events.len() == LIMIT {
             self.diagnostic_events.pop_front();
         }
-        self.diagnostic_events.push_back(format!("+{}ms {line}", diagnostic_clock().elapsed().as_millis()));
+        self.diagnostic_events.push_back(format!("+{}ms {line}", glue5_runtime::diagnostics_elapsed_ms()));
+    }
+
+    fn record_phone_touch_diagnostic(&mut self, line: String) {
+        const LIMIT: usize = 64;
+        if self.phone_touch_events.len() == LIMIT {
+            self.phone_touch_events.pop_front();
+            self.phone_touch_events_dropped = self.phone_touch_events_dropped.saturating_add(1);
+        }
+        self.phone_touch_events.push_back(format!("+{}ms {line}", glue5_runtime::diagnostics_elapsed_ms()));
+    }
+
+    fn cancel_pending_phone_tap(&mut self, outcome: &'static str) {
+        if let Some(pending) = self.phone_tap_pending.take() {
+            self.record_phone_touch_diagnostic(format!(
+                "phone_screen tap_seq_id={} outcome={outcome}",
+                pending.sequence
+            ));
+        }
+        self.phone_tap_click = None;
+    }
+
+    /// The runtime selected a phone-list row from this tap. Its one-frame
+    /// mouse-down was replaced by a gamepad confirm; cancel the rest of that
+    /// short click so a later frame cannot send the old mouse-down after all.
+    pub fn suppress_phone_tap_mouse(&mut self, sequence: u64) {
+        if self.phone_tap_click.is_some_and(|pending| pending.sequence == sequence) {
+            self.click = None;
+            self.phone_tap_click = None;
+            self.record_phone_touch_diagnostic(format!(
+                "phone_screen tap_seq_id={sequence} outcome=direct_selection_mouse_suppressed"
+            ));
+        }
     }
 
     fn record_gamepad(&mut self, pad: &Gamepad) {
@@ -1045,6 +1131,8 @@ impl Touch {
         let phone_closed = self.context.phone && !context.phone;
         self.context = context;
         if phone_opened || phone_closed {
+            self.phone_context_reset_pending = true;
+            self.cancel_pending_phone_tap("cancelled_phone_state_change");
             self.record_diagnostic(format!("phone out: {}", context.phone));
         }
         if context.phone {
@@ -1082,11 +1170,14 @@ impl Touch {
         }
         if phone_closed {
             // The phone's keys are gone with it: one still held (Back, say)
-            // must not go on pressing in play under its old name.
+            // must not go on pressing in play under its old name. Keep the
+            // release reason in the semantic trace if Back itself closed it.
             let mut released = 0;
+            let mut phone_keys = Vec::new();
             self.fingers.retain(|_, finger| {
-                if let Finger::Button { key: Key::Phone(_), bits, .. } = finger {
+                if let Finger::Button { key: Key::Phone(index), bits, .. } = finger {
                     released |= *bits;
+                    phone_keys.push(*index);
                     false
                 } else {
                     true
@@ -1094,6 +1185,12 @@ impl Touch {
             });
             self.pressed &= !released;
             self.pressed_inputs.clear();
+            for index in phone_keys {
+                self.record_phone_touch_diagnostic(format!(
+                    "phone_virtual_key key={} phase=phone_closed",
+                    Self::phone_key_name(index)
+                ));
+            }
         }
         if !self.aims_here() {
             self.aim_sticky = false;
@@ -1794,10 +1891,19 @@ impl Touch {
         } else {
             self.touch_finger(p)
         };
+        let phone_key = match finger {
+            Finger::Button { key: Key::Phone(index), .. } => Some(index),
+            _ => None,
+        };
+        if matches!(finger, Finger::Phone { .. }) || phone_key.is_some() {
+            self.phone_context_reset_pending = true;
+            self.cancel_pending_phone_tap("cancelled_by_new_phone_gesture");
+        }
         if matches!(finger, Finger::Phone { .. }) {
-            // The game's phone screen is a direct-touch target. Keep its
-            // pointer at the actual tap rather than accepting whichever app
-            // the D-pad happened to leave selected.
+            // Forward the actual screen point through the mouse-input path.
+            // The inspected phone scripts/movies do not establish that this
+            // changes the phone movie's selected slot; a tap may still accept
+            // the game's current selection until a selection bridge exists.
             self.mouse_at = Some(p);
             self.click = None;
         }
@@ -1831,6 +1937,12 @@ impl Touch {
             }
         }
         self.fingers.insert(id, finger);
+        if let Some(index) = phone_key {
+            self.record_phone_touch_diagnostic(format!(
+                "phone_virtual_key key={} phase=down",
+                Self::phone_key_name(index)
+            ));
+        }
     }
 
     /// Whether the phone button may pulse Up now (its only [`Kind::Tap`]
@@ -1963,7 +2075,36 @@ impl Touch {
         let wheel = self.wheel.trunc();
         self.wheel -= wheel;
         let at = self.mouse_at.map(|p| pos2(p.x / self.screen.x, p.y / self.screen.y));
-        Mouse { at, down, wheel: wheel as i32, keys }
+        let phone_tap = match self.phone_tap_pending {
+            Some(pending) if self.click == Some((pending.from, pending.until)) && down && now < pending.until => {
+                self.phone_tap_pending = None;
+                Some(pending)
+            }
+            Some(pending) if self.click != Some((pending.from, pending.until)) => {
+                self.cancel_pending_phone_tap("cancelled_click_replaced");
+                None
+            }
+            Some(pending) if now >= pending.until => {
+                self.cancel_pending_phone_tap("expired_before_mouse_down");
+                None
+            }
+            _ => None,
+        };
+        if self.phone_tap_click.is_some_and(|active| !down || self.click != Some((active.from, active.until))) {
+            self.phone_tap_click = None;
+        }
+        if let Some(pending) = phone_tap {
+            self.phone_tap_click = Some(pending);
+        }
+        let phone_tap_id = phone_tap.map(|pending| pending.sequence);
+        let phone_tap_at = phone_tap.map(|pending| {
+            pos2(
+                pending.position.x / self.screen.x.max(1.0),
+                pending.position.y / self.screen.y.max(1.0),
+            )
+        });
+        let phone_context_reset = std::mem::take(&mut self.phone_context_reset_pending);
+        Mouse { at, down, wheel: wheel as i32, phone_tap_id, phone_tap_at, phone_context_reset, keys }
     }
 
     pub fn finger_motion(&mut self, id: u64, x: f32, y: f32) {
@@ -2004,24 +2145,35 @@ impl Touch {
             *at = p;
             return;
         }
-        if let Some(Finger::Phone { origin, at, steps }) = self.fingers.get_mut(&id) {
-            *at = p;
-            self.mouse_at = Some(p);
-            let d = p - *origin;
-            if d.x.abs().max(d.y.abs()) >= PHONE_STEP * self.scale {
-                // The selection follows the finger, as on a touchpad.
-                self.pressed |= if d.y.abs() >= d.x.abs() {
-                    if d.y < 0.0 { button::UP } else { button::DOWN }
-                } else if d.x < 0.0 {
-                    button::LEFT
-                } else {
-                    button::RIGHT
-                };
-                *steps += 1;
-                *origin = p;
-                if self.haptics {
-                    haptics::tap();
+        if matches!(self.fingers.get(&id), Some(Finger::Phone { .. })) {
+            let mut swipe_step = None;
+            if let Some(Finger::Phone { origin, at, steps }) = self.fingers.get_mut(&id) {
+                *at = p;
+                self.mouse_at = Some(p);
+                let d = p - *origin;
+                if d.x.abs().max(d.y.abs()) >= PHONE_STEP * self.scale {
+                    // Preserve swipe navigation as directional steps. This is not
+                    // the direct-tap app selection the phone path still needs.
+                    let (direction, bit) = if d.y.abs() >= d.x.abs() {
+                        if d.y < 0.0 { ("Up", button::UP) } else { ("Down", button::DOWN) }
+                    } else if d.x < 0.0 {
+                        ("Left", button::LEFT)
+                    } else {
+                        ("Right", button::RIGHT)
+                    };
+                    self.pressed |= bit;
+                    *steps += 1;
+                    *origin = p;
+                    swipe_step = Some((direction, *steps));
+                    if self.haptics {
+                        haptics::tap();
+                    }
                 }
+            }
+            if let Some((direction, count)) = swipe_step {
+                self.record_phone_touch_diagnostic(format!(
+                    "phone_screen gesture=swipe_step direction={direction} count={count}"
+                ));
             }
             return;
         }
@@ -2166,9 +2318,9 @@ impl Touch {
         }
         match self.fingers.remove(&id) {
             // A debug area's click goes where the player taught it (its
-            // centre), as the phone's own taps click their point, when the
-            // finger lifts still inside it; its button already pulsed when
-            // the finger landed.
+            // centre); a phone-area tap instead emits a mouse click at the
+            // finger's screen point. Neither action here chooses a phone app
+            // slot; the game's selection bridge remains separate.
             Some(Finger::DebugArea { area, at, .. }) => {
                 if let Some(taken) = self.debug_areas.get(area).cloned()
                     && taken.action == DebugTouchAction::Click
@@ -2195,14 +2347,34 @@ impl Touch {
             Some(Finger::DebugEdit { .. }) => {}
             Some(Finger::Pinch(_)) => self.two = None,
             Some(Finger::Phone { origin, at, steps: 0 }) if origin.distance(at) <= TAP_SLOP * self.scale => {
-                // A tap accepts at its screen coordinate. Do not press South:
-                // that would launch the previously highlighted app instead
-                // of the one the player touched.
+                // Keep the exact screen point with the click so the runtime
+                // can hit-test a supported phone list before choosing whether
+                // to send the mouse-down or a direct selection confirm.
                 let from = Instant::now();
-                self.click = Some((from, from + MIN_PRESS));
+                let until = from + MIN_PRESS;
+                self.click = Some((from, until));
+                self.phone_tap_seq = self.phone_tap_seq.wrapping_add(1).max(1);
+                let tap_id = self.phone_tap_seq;
+                self.cancel_pending_phone_tap("superseded_by_new_tap");
+                self.phone_tap_pending = Some(PendingPhoneTap { sequence: tap_id, from, until, position: at });
+                self.record_phone_touch_diagnostic(format!(
+                    "phone_screen tap_seq_id={tap_id} gesture=tap outcome=queued_for_mouse_down"
+                ));
                 if self.haptics {
                     haptics::tap();
                 }
+            }
+            Some(Finger::Phone { steps, .. }) if steps > 0 => {
+                self.record_phone_touch_diagnostic(format!("phone_screen gesture=swipe_end steps={steps}"));
+            }
+            Some(Finger::Phone { .. }) => {
+                self.record_phone_touch_diagnostic("phone_screen gesture=drag_without_navigation".to_owned());
+            }
+            Some(Finger::Button { key: Key::Phone(index), .. }) => {
+                self.record_phone_touch_diagnostic(format!(
+                    "phone_virtual_key key={} phase=up",
+                    Self::phone_key_name(index)
+                ));
             }
             Some(Finger::Button { key: Key::Action(a), origin, last, .. })
                 if unsafe { Self::is_aim(&*a) } && origin.distance(last) <= TAP_SLOP * self.scale =>
@@ -2262,6 +2434,13 @@ impl Touch {
         match self.fingers.remove(&id) {
             Some(Finger::Pinch(_) | Finger::Mouse { drag: Some(Drag::Two), .. }) => self.two = None,
             Some(Finger::Mouse { drag: Some(Drag::Hold), .. }) => self.click = None,
+            Some(Finger::Phone { steps, .. }) => self.record_phone_touch_diagnostic(format!(
+                "phone_screen gesture=cancel steps={steps}"
+            )),
+            Some(Finger::Button { key: Key::Phone(index), .. }) => self.record_phone_touch_diagnostic(format!(
+                "phone_virtual_key key={} phase=cancel",
+                Self::phone_key_name(index)
+            )),
             _ => {}
         }
     }
@@ -2280,6 +2459,8 @@ impl Touch {
         self.locked_stick = Vec2::ZERO;
         self.sprint_since = None;
         self.click = None;
+        self.phone_context_reset_pending = true;
+        self.cancel_pending_phone_tap("cancelled_touch_clear");
         self.key_until = [None; 6];
         self.wheel = 0.0;
         self.steps = 0.0;

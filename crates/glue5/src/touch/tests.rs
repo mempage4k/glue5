@@ -1180,26 +1180,31 @@ fn with_the_phone_out_unplaced_a_tap_on_its_place_presses_no_button() {
     assert_eq!(t.gamepad().buttons, 0, "the tap must not put the phone away");
 }
 
-/// With the phone out, a tap clicks its actual screen coordinate instead of
-/// accepting the app that happened to be highlighted; swipes remain available
-/// for directional navigation and neither gesture moves or turns the player.
+/// With the phone out, a tap emits a mouse click at its screen coordinate;
+/// the touch layer does not choose a phone app slot. Swipes remain available
+/// for directional navigation, and neither gesture moves or turns the player.
 #[test]
-fn the_phone_screen_takes_direct_taps_and_keeps_swipe_navigation() {
+fn the_phone_screen_emits_pointer_clicks_and_keeps_swipe_navigation() {
     let mut t = phone();
     t.set_context(PlayerContext { phone: true, ..context(Activity::OnFoot) });
     t.set_game(Vec::new(), Some(phone_at(t.screen.x / t.screen.y)));
     let c = t.phone.unwrap().center();
     let (x, y) = at(&t, c);
     t.finger_down(1, x, y);
-    let pointer = t.take_mouse().at.unwrap();
+    let pointer = t.take_mouse();
+    assert!(pointer.phone_context_reset, "a new phone gesture clears the previous tap correlation");
+    let pointer = pointer.at.unwrap();
     assert!(
         (pointer.x - x).abs() < 1.0e-6 && (pointer.y - y).abs() < 1.0e-6,
-        "pointer follows the touched app"
+        "pointer follows the touched screen point"
     );
     t.finger_up(1);
     let click = t.take_mouse();
-    assert!(click.down, "a tap clicks the touched point");
-    assert_eq!(t.gamepad().buttons & button::SOUTH, 0, "do not launch the old selection");
+    assert!(click.down, "a tap queues a mouse click at that point");
+    assert_eq!(click.phone_tap_id, Some(1), "the direct phone tap keeps its ID to the requested mouse-down");
+    let tap_at = click.phone_tap_at.expect("the exact tap point accompanies its sequence ID");
+    assert!((tap_at.x - x).abs() < 1.0e-6 && (tap_at.y - y).abs() < 1.0e-6);
+    assert_eq!(t.gamepad().buttons & button::SOUTH, 0, "the runtime, not the touch layer, decides whether Select is needed");
     assert_eq!(t.gamepad().left, [0.0, 0.0]);
 
     t.finger_down(2, x, y);
@@ -1211,9 +1216,103 @@ fn the_phone_screen_takes_direct_taps_and_keeps_swipe_navigation() {
     t.finger_motion(2, x3, y3);
     assert_eq!(t.gamepad().buttons & button::RIGHT, button::RIGHT, "then right");
     t.finger_up(2);
-    assert!(!t.take_mouse().down, "a swipe is not an accidental click");
-    assert_eq!(t.gamepad().buttons & button::SOUTH, 0, "a swipe does not select");
+    let swipe_mouse = t.take_mouse();
+    assert!(!swipe_mouse.down, "a swipe is not an accidental click");
+    assert_eq!(swipe_mouse.phone_tap_id, None, "a swipe does not get a direct-tap ID");
+    assert_eq!(t.gamepad().buttons & button::SOUTH, 0, "a swipe does not press gamepad Select");
     assert_eq!(t.look, Vec2::ZERO, "nor turns the camera");
+}
+
+#[test]
+fn direct_phone_selection_suppresses_the_remainder_of_its_mouse_click() {
+    let mut t = phone();
+    t.set_context(PlayerContext { phone: true, ..context(Activity::OnFoot) });
+    t.set_game(Vec::new(), Some(phone_at(t.screen.x / t.screen.y)));
+    let (x, y) = at(&t, t.phone.unwrap().center());
+    t.finger_down(1, x, y);
+    t.take_mouse();
+    t.finger_up(1);
+    let click = t.take_mouse();
+    assert!(click.down);
+    let tap_id = click.phone_tap_id.expect("the direct tap has a sequence ID");
+
+    t.suppress_phone_tap_mouse(tap_id);
+    assert!(!t.take_mouse().down, "the remaining short click cannot be forwarded on a later frame");
+    assert!(t.phone_touch_diagnostics().iter().any(|event| {
+        event.contains("tap_seq_id=1 outcome=direct_selection_mouse_suppressed")
+    }));
+}
+
+#[test]
+fn phone_touch_trace_separates_swipes_screen_taps_and_virtual_back() {
+    let mut t = phone();
+    t.set_context(PlayerContext { phone: true, ..context(Activity::OnFoot) });
+    t.set_game(Vec::new(), Some(phone_at(t.screen.x / t.screen.y)));
+    let center = t.phone.unwrap().center();
+
+    let (x, y) = at(&t, center);
+    t.finger_down(1, x, y);
+    let (x, y) = at(&t, center + vec2(0.0, -PHONE_STEP - 1.0));
+    t.finger_motion(1, x, y);
+    assert_eq!(t.gamepad().buttons & button::UP, button::UP);
+    t.finger_up(1);
+
+    let (x, y) = at(&t, center);
+    t.finger_down(2, x, y);
+    t.finger_up(2);
+
+    let back = t.buttons().iter().find(|b| matches!(b.key, Key::Phone(5))).expect("virtual Back key").at;
+    let (x, y) = at(&t, back);
+    t.finger_down(3, x, y);
+    assert!(t.take_mouse().phone_context_reset, "Back starts a new phone-input context");
+    assert!(t.phone_tap_pending.is_none(), "Back cancels an unforwarded tap ID");
+    t.finger_up(3);
+
+    // The game's response may close the phone before SDL reports finger-up.
+    t.finger_down(4, x, y);
+    t.set_context(context(Activity::OnFoot));
+    assert!(t.take_mouse().phone_context_reset, "phone close clears the active correlation");
+
+    let events = t.phone_touch_diagnostics();
+    assert!(events.iter().any(|e| e.contains("phone_screen gesture=swipe_step direction=Up count=1")));
+    assert!(events.iter().any(|e| e.contains("phone_screen gesture=swipe_end steps=1")));
+    assert!(events.iter().any(|e| e.contains("phone_screen tap_seq_id=1 gesture=tap outcome=queued_for_mouse_down")));
+    assert!(events.iter().any(|e| e.contains("tap_seq_id=1 outcome=cancelled_by_new_phone_gesture")));
+    assert!(events.iter().any(|e| e.contains("phone_virtual_key key=Back phase=down")));
+    assert!(events.iter().any(|e| e.contains("phone_virtual_key key=Back phase=up")));
+    assert!(events.iter().any(|e| e.contains("phone_virtual_key key=Back phase=phone_closed")));
+    assert!(events.iter().all(|e| e.starts_with('+') && e.contains("ms ")));
+    assert!(
+        events.iter().all(|e| !e.contains(" x=") && !e.contains(" y=")),
+        "the semantic trace must not include coordinates"
+    );
+}
+
+#[test]
+fn a_phone_tap_id_expires_with_its_click_and_is_not_attached_to_a_replacement() {
+    let mut t = phone();
+    let from = Instant::now() - Duration::from_secs(1);
+    let until = from + MIN_PRESS;
+    t.click = Some((from, until));
+    t.phone_tap_pending = Some(PendingPhoneTap { sequence: 17, from, until, position: Pos2::ZERO });
+
+    let expired = t.take_mouse();
+    assert!(!expired.down);
+    assert_eq!(expired.phone_tap_id, None);
+    assert!(t.phone_touch_diagnostics().iter().any(|event| {
+        event.contains("tap_seq_id=17 outcome=expired_before_mouse_down")
+    }));
+
+    let from = Instant::now();
+    let until = from + MIN_PRESS;
+    t.phone_tap_pending = Some(PendingPhoneTap { sequence: 18, from, until, position: Pos2::ZERO });
+    t.click = Some((from + Duration::from_secs(1), until + Duration::from_secs(1)));
+
+    let replaced = t.take_mouse();
+    assert_eq!(replaced.phone_tap_id, None);
+    assert!(t.phone_touch_diagnostics().iter().any(|event| {
+        event.contains("tap_seq_id=18 outcome=cancelled_click_replaced")
+    }));
 }
 
 /// Put away, the phone's place is the camera's again.
