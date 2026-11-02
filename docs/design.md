@@ -733,6 +733,20 @@ with two, the phone warming over the four runs). There the renderer never
 waits for the GPU and the CPU sets the pace, so a second frame only adds
 latency. `GLUE5_ENGINE_ARGS=-FrameQueueLimit=N` overrides it.
 
+A phone that heats up holds the game to fewer frames a second before the
+system's own governor does. Android's Thermal API is read (the NDK's
+`AThermal_getCurrentThermalStatus`, and `AThermal_getThermalHeadroom` for
+the forecast, both looked up at run time), and a governor with hysteresis
+turns the readings into a level (0 to 3): it rises after the heat has been
+asked for a few seconds and falls one level at a time, slowly, so a phone
+near a threshold does not flap. The host's limiter then waits for the
+slower of the engine's own limit and the level's (40 fps at level 1, 30 at
+levels 2 and 3), the performance hint's target follows it (so the system
+does not raise clocks for a rate the host is not keeping), and the display
+is asked for the same rate. With *Frame rate and resolution*, the last
+level also renders at 85% of the chosen scale. The setting is in Settings
+› Video › *Thermal back-off*, on by default on Android and off elsewhere.
+
 ## Input
 
 Input is routed through the game's PC interfaces to preserve controller
