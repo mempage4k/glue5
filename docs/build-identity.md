@@ -71,8 +71,9 @@ aos chats.
 
 * **Implementado neste branch:** sim — `.github/workflows/build.yml`,
   `docs/getting-started.md`, `docs/github-build.md` e este documento.
-* **Não publicado:** nenhum push, PR, merge ou workflow disparado por esta
-  revisão para esta mudança.
+* **Publicado:** `575f816` em `arena/f2f782ce-glue5` (push autorizado pelo
+  dono em 2026-11-02). Sem PR, merge, integração em `main` nem workflow
+  disparado.
 * **Não testado em build real:** nenhum Build Android foi executado para
   validar o novo nome. O YAML e todos os blocos `run:` foram validados
   estaticamente; a validação de verdade é o próximo Build do dono no Actions.
