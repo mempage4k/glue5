@@ -136,6 +136,13 @@ pub fn scenes_dir(user_dir: &Path) -> PathBuf {
     beside_game().map_or_else(|| user_dir.join("scenes"), |dir| dir.join("scenes"))
 }
 
+/// The app's own fallback folder for optional menu fonts (the game's own
+/// cuts, supplied by the player; never bundled — see
+/// `docs/gta5-visual-parity.md`).
+pub fn fonts_dir(user_dir: &Path) -> PathBuf {
+    beside_game().map_or_else(|| user_dir.join("fonts"), |dir| dir.join("fonts"))
+}
+
 /// Where a phone keeps the game's folder (its parent).
 fn beside_game() -> Option<PathBuf> {
     #[cfg(target_os = "ios")]

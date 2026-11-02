@@ -301,8 +301,10 @@ fn decode(path: &Path, root: &Path) -> Option<ColorImage> {
 /// original is kept for the unblurred side. Downsampling bounds work and GPU
 /// memory; premultiplied color avoids dark fringes around transparent layers.
 fn blur_background(image: &ColorImage) -> ColorImage {
-    const REDUCTION: usize = 4;
-    const RADIUS: usize = 2;
+    // Kept weak on purpose: the pause menu keeps the world readable behind
+    // its translucent blocks — a light defocus, not a frosted pane.
+    const REDUCTION: usize = 2;
+    const RADIUS: usize = 1;
     let [width, height] = image.size;
     let small_w = width.div_ceil(REDUCTION);
     let small_h = height.div_ceil(REDUCTION);
@@ -903,8 +905,8 @@ mod tests {
             }
         }
         let result = blur_background(&ColorImage::new([32, 16], pixels));
-        assert_eq!(result.size, [8, 4]);
-        let edge = result.pixels[4 * 2 + 3].r();
+        assert_eq!(result.size, [16, 8]);
+        let edge = result.pixels[2 * 16 + 7].r();
         assert!(edge > 0 && edge < 255, "blur should soften the edge");
         let tiny = blur_background(&ColorImage::new([1, 1], vec![Color32::WHITE]));
         assert_eq!(tiny.size, [1, 1]);

@@ -23,6 +23,14 @@
 - [Android performance: Galaxy S21 Plus](android-performance-s21.md): device-specific hypotheses, verification gates and measurements; static review only until validated on hardware.
 - [Validation on the S21 Plus](validation-s21.md): what a build has to prove on the device, in order — the thermal back-off, the phone preset, the PGO round and the frame rate goal.
 - [Touch, HUD and benchmark roadmap](roadmap-touch-hud-benchmarks.md): scoped implementation backlog and progress for touch/HUD and GLUE 5 benchmarks.
+- [GTA V reference inventory](gta5-reference-inventory.md): measured reference material from the game's own files (fonts, palette, Scaleform geometry); metadata CSVs live in [`gta5-referencia/`](gta5-referencia/). `[MENU]` area.
+- [GTA V visual parity audit](gta5-visual-parity.md): measured deltas between the egui shell and the game's visual language; backlog source for GLU-10 and GLU-13…GLU-19. `[MENU]` area.
+- [Shell notifications design](shell-notifications.md): the five notification channels (pop-up, toast, help hint, settings note, signs) and when to grow them. `[MENU]` area.
+- [Frontend menu sounds](menu-sfx.md): verified frontend sound names mined from the game's scripts and their mapping to the shell's sound events. `[MENU]` area.
+- [Runtime font extraction design](font-extraction.md): extracting the game's fonts from the player's own installation into the shell's font cache (GLU-24; design, implementation pending). `[MENU]` area.
+- [RPF/AWC reader research](rpf-awc-reader.md): reading game archives at runtime (GLU-21; research — implementation belongs to another area). `[MENU]` area.
+- [Round-2 ChatGPT prompt (historical)](prompt-chatgpt-2026-11-01-ysc-full.md): the fulfilled 2026-11-01 request that produced the YSC decompilation lot; kept as record. `[MENU]` area.
+- [[MENU] branch documentation index (historical)](documentacao-branch-menu.md): the index of the docs that lived only on the `[MENU]` branch until the 2026-11-02 integration; kept as the record of that decision.
 - [GTA V runtime patches](gta-patches.md): durable rules, evidence, patch boundaries, and open questions for future GTA patch work.
 - [Windows streaming server and audio mirror audit](windows-stream-audio-audit.md): a supplied Windows audit snapshot, repository streaming behavior, and open questions for optional character-voice downloads.
 - [Streaming flow map](streaming-flow.md): source map from server announcement and discovery to client cache and engine reads; includes the current Android-only support note.
@@ -85,3 +93,12 @@ delegation messages.
 merged via PR #15. The diary is merged additively: its existing `main` text,
 the `[SERV]` entry already landed via PR #15, and the `[TOUCH]` additions are
 retained. No unpublished content from another specialist branch was imported.
+
+**Update (2026-11-02, `[MENU]` integration):** the `[MENU]` rows in the
+table above are stale — with the owner's authorization, the seven `[MENU]`
+documents, the `gta5-referencia/` CSVs and
+`documentacao-branch-menu.md` now integrate into `main` from
+`arena/4f5cc306-glue5` and are linked under *Engineering investigations*
+above. The table is kept as the pre-integration record; the `[TOUCH]`,
+`[SERV]` and `[PERF]` rows were not edited by `[MENU]` and remain for
+their own areas (and general review) to update.

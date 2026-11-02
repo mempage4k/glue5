@@ -31,6 +31,7 @@ mod mods;
 mod menu;
 mod pages;
 mod perf;
+mod popup;
 mod scenes;
 mod servers;
 mod shell;
@@ -358,6 +359,8 @@ pub struct Ui {
     scale_edit: Option<f32>,
     /// A mode was chosen: this frame shows that it starts, then it does.
     starting: Option<Mode>,
+    /// A warning over the page, waiting for its answer.
+    popup: Option<popup::Open>,
     /// GTA Online's card on the start page is open (its lobby and name).
     online_open: bool,
     /// The settings button as last drawn (centre, radius), in points.
@@ -371,6 +374,8 @@ pub struct Ui {
     /// Notifications over everything (Social Club's overlay showed them),
     /// the oldest first, and where they were last drawn (to tap them).
     toasts: std::collections::VecDeque<Toast>,
+    /// A help line being shown (see [`Hint`]).
+    hint: Option<Hint>,
     toast_area: Option<Rect>,
     /// The touch controls as last drawn: their taps are the game's, even
     /// under a notification.
@@ -411,6 +416,27 @@ const TOAST_WIDTH: f32 = 300.0;
 const TOAST_HEIGHT: f32 = 72.0;
 const TOAST_FADE: f32 = 0.35;
 
+/// A help line, the game's own kind of hint (its help text): one dark
+/// strap of words that stays as long as it takes to read, then goes. Ours
+/// says the things no page was asked about — that a copy landed on the
+/// clipboard, that a wait is over.
+struct Hint {
+    text: String,
+    since: Instant,
+    until: Instant,
+}
+
+/// The help line's fade (the game's HUD components fade in 100 ms).
+const HINT_FADE: f32 = 0.1;
+
+/// How long a help line stays, in the game's help-text shape: a base plus
+/// 333 ms a word, the subtotal raised by a third — never a blink, never a
+/// paragraph's worth of waiting.
+fn hint_for(text: &str) -> Duration {
+    let words = text.split_whitespace().count() as u64;
+    Duration::from_millis(((2000 + words * 333) * 13 / 10).clamp(3000, 12000))
+}
+
 impl Ui {
     pub fn new(overlay: glue5_gpu::Overlay, user_dir: &Path, selected_mode: Mode) -> Self {
         let ctx = egui::Context::default();
@@ -439,11 +465,13 @@ impl Ui {
             note: None,
             scale_edit: None,
             starting: None,
+            popup: None,
             online_open: false,
             gear: None,
             repaint_at: Some(Instant::now()),
             perf: Default::default(),
             toasts: Default::default(),
+            hint: None,
             toast_area: None,
             controls: Vec::new(),
             chip: Default::default(),
@@ -495,6 +523,25 @@ impl Ui {
         let after = self.toasts.back().map_or(now, |t| t.until.max(now));
         let toast = friends::Toast { title: "Mod", name: module.to_owned(), text: text.to_owned(), tab: Default::default() };
         self.toasts.push_back(Toast { toast, from_mod: true, since: now, until: after + TOAST_FOR });
+        sfx::want(Sound::Notify);
+        self.repaint();
+    }
+
+    /// A help line over the page or the game (see [`Hint`]); a new one
+    /// replaces the one showing, as the game's hints do.
+    pub fn alert(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        let now = Instant::now();
+        // The same line again (a repeated press, a state flapping): let it
+        // stay its full time from now, without blinking or ticking twice.
+        if let Some(hint) = &mut self.hint {
+            if hint.text == text {
+                hint.until = now + hint_for(&text);
+                self.repaint();
+                return;
+            }
+        }
+        self.hint = Some(Hint { until: now + hint_for(&text), since: now, text });
         sfx::want(Sound::Notify);
         self.repaint();
     }
@@ -555,6 +602,13 @@ impl Ui {
     /// credits back to where they were opened; on the start page, GTA
     /// Online's card closes.
     pub fn back(&mut self) {
+        // A warning on show takes the way back first: dropping it is its
+        // cancel, and the page under it stays where it was.
+        if self.popup.take().is_some() {
+            sfx::want(Sound::Back);
+            self.repaint();
+            return;
+        }
         let was = self.page;
         match self.page {
             Some(Page::Start) if self.online_open => {
@@ -824,6 +878,22 @@ impl Ui {
 
     pub fn nav(&mut self, nav: Nav) {
         self.gamepad_prompts = true;
+        // A warning on show takes the pad for itself: its keys are taken
+        // out of the frame's input before the page under it can see them,
+        // so they must arrive as themselves, focus or no focus.
+        if self.popup.is_some() {
+            let key = match nav {
+                Nav::Up => egui::Key::ArrowUp,
+                Nav::Down => egui::Key::ArrowDown,
+                Nav::Left => egui::Key::ArrowLeft,
+                Nav::Right => egui::Key::ArrowRight,
+                Nav::Activate => egui::Key::Enter,
+                Nav::Back => return self.back(),
+            };
+            self.key(key, true, Default::default());
+            self.key(key, false, Default::default());
+            return;
+        }
         if self.page == Some(Page::Start) && !self.ctx.egui_wants_keyboard_input() {
             match nav {
                 Nav::Left | Nav::Right => {
@@ -892,6 +962,9 @@ impl Ui {
         let alert = status.stream_alert.filter(|_| self.page.is_none());
         let now = Instant::now();
         self.toasts.retain(|t| now < t.until);
+        if self.hint.as_ref().is_some_and(|h| now >= h.until) {
+            self.hint = None;
+        }
         if self.toasts.is_empty() {
             self.toast_area = None;
         }
@@ -900,6 +973,7 @@ impl Ui {
             && gear.is_none()
             && alert.is_none()
             && self.toasts.is_empty()
+            && self.hint.is_none()
             && (!hud || !self.perf.due(settings.overlay_detail))
             && status.started.is_none()
         {
@@ -922,6 +996,12 @@ impl Ui {
         // Play was chosen at the last frame: this one shows that the game
         // starts, then it does.
         let starting = std::mem::take(&mut self.starting);
+        // A warning on show keeps the keys it answers to itself.
+        let popup_keys = if self.popup.is_some() {
+            popup::take_keys(&mut self.events)
+        } else {
+            popup::Keys::default()
+        };
         let ppp = pixels_per_point(window);
         let screen = Rect::from_min_size(Pos2::ZERO, screen_size(window));
         let safe = safe_rect(window);
@@ -982,12 +1062,15 @@ impl Ui {
         // pause, the settings), where they show.
         let below = if self.gear.is_some() { (30.0 + GEAR_RADIUS) * scale + 8.0 } else { 12.0 };
         self.toast_area = draw_toasts(&ctx, safe, below, &taken, &self.toasts, now);
-        if !self.toasts.is_empty() {
+        if !self.toasts.is_empty() || self.hint.is_some() {
             // Through egui: its delay decides the next frame after this one.
             ctx.request_repaint_after(Duration::from_millis(33));
         }
         // The sign, legible whatever the touch controls' opacity.
         taken.extend(self.toast_area);
+        if let Some(hint) = &self.hint {
+            taken.extend(draw_hint(&ctx, safe, below, &taken, hint, now));
+        }
         let alpha = gear.unwrap_or(1.0).max(0.75);
         self.chip.draw(&ctx, safe, alert, self.gear, &taken, scale, alpha);
         match self.page {
@@ -1031,6 +1114,28 @@ impl Ui {
         // The shell already displays the build label in its header.
         if self.page.is_none() {
             draw_build_identity(&ctx, safe);
+        }
+        // A page that had to ask first: its warning opens over what it
+        // drew, and its answer is the action the page stood for.
+        if let Some(request) = popup::take() {
+            self.popup = Some(popup::Open::new(request));
+            sfx::want(Sound::Open);
+        }
+        let answered = self.popup.as_mut().map(|open| popup::show(&ctx, open, screen, content, popup_keys));
+        match answered {
+            None | Some(popup::Outcome::Open) => {}
+            Some(popup::Outcome::Confirmed(confirm)) => {
+                self.popup = None;
+                sfx::want(Sound::Confirm);
+                actions.push(match confirm {
+                    popup::Confirm::ClearCopy => Action::ClearCopy,
+                    popup::Confirm::ResetGraphics => Action::ResetGraphics,
+                });
+            }
+            Some(popup::Outcome::Cancelled) => {
+                self.popup = None;
+                sfx::want(Sound::Back);
+            }
         }
         // The selection moved to another control (a d-pad, an arrow, a stick,
         // or the pointer over another line): the menu ticks, as a console's
@@ -1135,6 +1240,46 @@ fn draw_toasts(
                     friends::draw_toast(ui, &t.toast, width);
                 });
             }
+        });
+    Some(response.response.rect)
+}
+
+/// The help line (see [`Hint`]): the game's own shape — one black strap as
+/// high as its words (margins 7/5/4/12), hugging the top right corner
+/// (the left is the shell's panel) where it covers nothing else, fading
+/// in and out. Where it is, if it could be placed.
+fn draw_hint(ctx: &egui::Context, safe: Rect, below: f32, taken: &[Rect], hint: &Hint, now: Instant) -> Option<Rect> {
+    let scale = theme::layout_scale(safe);
+    let margins = vec2((7.0 + 5.0) * scale, (4.0 + 12.0) * scale);
+    let wrap = ((360.0 * scale).min((safe.width() - 32.0).max(1.0)) - margins.x).max(1.0);
+    let measure = ctx.layer_painter(LayerId::new(Order::Tooltip, Id::new("hint-measure")));
+    let galley = measure.layout(
+        hint.text.clone(),
+        FontId::new(14.5 * scale, theme::fonts::regular()),
+        theme::palette::TEXT_HI,
+        wrap,
+    );
+    let size = galley.size() + margins;
+    // The game's help line sits in a top corner, not floating mid-top: try
+    // the top right first (over the scene, clear of the panel), and fall
+    // back to the notifications' placement when the corner is busy.
+    let corner = pos2(safe.right() - size.x - 16.0, safe.top() + 12.0);
+    let corner_rect = Rect::from_min_size(corner, size);
+    let corner_free = safe.contains_rect(corner_rect) && !taken.iter().any(|t| t.intersects(corner_rect.expand(4.0)));
+    let at = if corner_free { corner } else { toast_place(safe, below, size, taken)? };
+    let shown = now.duration_since(hint.since).as_secs_f32();
+    let left = hint.until.saturating_duration_since(now).as_secs_f32();
+    let response = egui::Area::new(Id::new("hint"))
+        .order(Order::Tooltip)
+        .fixed_pos(at)
+        .interactable(false)
+        .show(ctx, |ui| {
+            ui.set_width(size.x);
+            ui.set_height(size.y);
+            ui.multiply_opacity((shown.min(left) / HINT_FADE).clamp(0.0, 1.0));
+            let painter = ui.painter();
+            painter.rect_filled(Rect::from_min_size(at, size), 0, Color32::from_rgba_unmultiplied(0, 0, 0, 186));
+            painter.galley(at + vec2(7.0 * scale, 4.0 * scale), galley, theme::palette::TEXT_HI);
         });
     Some(response.response.rect)
 }
@@ -1281,6 +1426,15 @@ mod tests {
     use super::*;
     use crate::touch::Touch;
     use glue5_runtime::input::{Activity, Character, Driving, PlayerContext};
+
+    #[test]
+    fn a_hint_stays_longer_the_more_there_is_to_read() {
+        let short = hint_for("Copied.");
+        let long = hint_for("The whole report is on the clipboard, ready to paste anywhere.");
+        assert!(long > short, "{short:?} !< {long:?}");
+        assert!(short >= Duration::from_millis(3000));
+        assert!(hint_for(&"word ".repeat(80)) <= Duration::from_millis(12000));
+    }
 
     #[test]
     fn blur_matches_the_full_bleed_panel_in_the_output() {

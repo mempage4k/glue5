@@ -24,14 +24,11 @@ pub struct ServersPage {
     address: String,
     /// When this page last started a search; none: just opened.
     searched: Option<Instant>,
-    /// Delete was pressed once: the next press deletes the copy.
-    deleting: bool,
 }
 
 impl ServersPage {
     pub(super) fn opened(&mut self) {
         self.searched = None;
-        self.deleting = false;
     }
 }
 
@@ -51,7 +48,7 @@ pub(super) fn servers_page(
         in_use(ui, settings, status);
         network(ui, settings, status, actions);
         by_address(ui, page, actions);
-        this_device(ui, page, settings, status, actions);
+        this_device(ui, settings, status);
         ui.add_space(4.0 * theme::density(ui));
         muted(
             ui,
@@ -172,13 +169,7 @@ fn by_address(ui: &mut egui::Ui, page: &mut ServersPage, actions: &mut Vec<Actio
 }
 
 /// What this device keeps: the whole game or what was read, and deleting it.
-fn this_device(
-    ui: &mut egui::Ui,
-    page: &mut ServersPage,
-    settings: &mut Settings,
-    status: &Status,
-    actions: &mut Vec<Action>,
-) {
+fn this_device(ui: &mut egui::Ui, settings: &mut Settings, status: &Status) {
     section(ui, "ON THIS DEVICE", |_| {});
     let stream = status.stream.map(|(_, s)| s);
     if paths::can_download_all() {
@@ -202,14 +193,10 @@ fn this_device(
         n if stream.is_some_and(|s| s.complete) => format!("{}: the whole game", bytes(n)),
         n => format!("{}, kept for the next starts", bytes(n)),
     };
-    page.deleting &= copy > 0 && status.started.is_none();
     setting(ui, "Copy on this device", Control::Action, Some(&what), |ui| {
         ui.add_enabled_ui(status.started.is_none() && copy > 0, |ui| {
-            if action_button(ui, if page.deleting { "Sure?" } else { "Delete" }).clicked() {
-                if page.deleting {
-                    actions.push(Action::ClearCopy);
-                }
-                page.deleting = !page.deleting;
+            if action_button(ui, "Delete").clicked() {
+                super::popup::ask(super::popup::Request::clear_copy());
             }
         })
         .response

@@ -411,7 +411,7 @@ fn settings_items(
                 "The game's own graphics settings, back to the engine's defaults"
             };
             if action_row(ui, "Restore graphics", reset_help, "RESET") && !status.graphics_reset && status.game_dir.is_some() {
-                actions.push(Action::ResetGraphics);
+                super::popup::ask(super::popup::Request::reset_graphics());
             }
         }
         SettingsTab::Display => {
@@ -634,7 +634,7 @@ fn settings_items(
                 );
             }
             if status.game_dir.is_some() && action_row(ui, "Clear the local copy", "Deletes the copy this device streams, not your game folder", "CLEAR") {
-                actions.push(Action::ClearCopy);
+                super::popup::ask(super::popup::Request::clear_copy());
             }
             #[cfg(target_os = "android")]
             {
