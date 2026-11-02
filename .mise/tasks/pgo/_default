@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Profile the game for PGO: an instrumented build runs the engine's benchmark headless, its profile merged into target/glue5-tools/pgo/game.profdata (then build with GLUE5_GAME_PGO=<that file>)"
+#MISE description="Profile the game for PGO: an instrumented build runs the engine's benchmark headless, its profile merged into target/glue5-tools/pgo/game.profdata (then build with GLUE5_GAME_PGO=<that file>; on a phone: mise run pgo:android)"
 #MISE depends=["setup"]
 set -euo pipefail
 dir="$PWD/target/glue5-tools/pgo"

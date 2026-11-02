@@ -142,6 +142,9 @@ fn quit(stream: Option<&glue5_stream::Client>, code: i32) -> ! {
     if let Some(client) = stream {
         client.flush();
     }
+    // The profile, if the game was built instrumented: the process ends
+    // without the exit handlers.
+    glue5::write_profile();
     glue5_runtime::exit::process(code)
 }
 

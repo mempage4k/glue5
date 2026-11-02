@@ -37,10 +37,49 @@ const LOW: &[(&str, &str)] = &[
 /// defaults for the adapter it is given, the same everywhere).
 const DEFAULTS: &str = include_str!("settings.xml");
 
+/// The phone preset: the same world, with the parts that cost the most
+/// bandwidth and fill rate turned down.
+///
+/// A phone's GPU (a Mali-G78 on the Galaxy S21+) is fed by a phone's
+/// memory: the texture quality is what it feels most (the bigger textures
+/// are read again and again, from memory the phone shares with everything
+/// else), the anisotropic filtering reads each texel several times, and the
+/// shadows, the reflections, the water and the grass are what fill the
+/// screen. What is left is the same city, the same cars and the same
+/// people.
+const PHONE: &[(&str, &str)] = &[
+    ("TextureQuality", "1"),
+    ("ShadowQuality", "1"),
+    ("Shadow_SoftShadows", "false"),
+    ("Shadow_LongShadows", "false"),
+    ("Shadow_ParticleShadows", "false"),
+    ("Shadow_Distance", "0.500000"),
+    ("ReflectionQuality", "0"),
+    ("ReflectionMSAA", "0"),
+    ("SSAO", "0"),
+    ("AnisotropicFiltering", "0"),
+    ("MSAA", "0"),
+    ("MSAAFragments", "0"),
+    ("MSAAQuality", "0"),
+    ("WaterQuality", "0"),
+    ("ParticleQuality", "0"),
+    ("GrassQuality", "0"),
+    ("ShaderQuality", "1"),
+    ("PostFX", "0"),
+    ("DoF", "false"),
+    ("MotionBlurStrength", "0.000000"),
+];
+
 /// Writes the low-memory preset over the current settings (or the engine's
 /// defaults, before its first start).
 pub fn apply_low_preset(user_dir: &Path) -> io::Result<()> {
     apply(user_dir, LOW)
+}
+
+/// Writes the phone preset over the current settings (or the engine's
+/// defaults, before its first start).
+pub fn apply_phone_preset(user_dir: &Path) -> io::Result<()> {
+    apply(user_dir, PHONE)
 }
 
 /// Writes `settings` (name, value) over the current settings (or the
@@ -121,6 +160,9 @@ mod tests {
     #[test]
     fn preset_names_are_in_the_defaults() {
         for (name, _) in LOW {
+            assert!(DEFAULTS.contains(&format!("<{name} value=\"")), "{name}");
+        }
+        for (name, _) in PHONE {
             assert!(DEFAULTS.contains(&format!("<{name} value=\"")), "{name}");
         }
     }

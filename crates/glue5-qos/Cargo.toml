@@ -1,6 +1,6 @@
 [package]
 name = "glue5-qos"
-description = "Thread priorities: Apple's quality-of-service classes, Linux's and Android's nice values and timer slack, Android's performance hints"
+description = "Thread priorities: Apple's quality-of-service classes, Linux's and Android's nice values and timer slack, Android's performance hints; Android's thermal state"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

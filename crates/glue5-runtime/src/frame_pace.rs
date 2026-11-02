@@ -11,6 +11,9 @@
 //! host then waits for the same deadline, in sleeps of half what is left
 //! (none too long however late each comes back), and stores the frame's
 //! end as the engine would have.
+//!
+//! A phone that heats up holds the game to fewer frames a second
+//! ([`set_thermal_cap`]): the host waits for the slower of the two.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -44,6 +47,16 @@ pub fn set_background(on: bool) {
     }
 }
 
+/// A frame rate the host holds the game to when the phone is hot (0: none;
+/// see glue5-qos's `thermal`), on top of the engine's own limit.
+static THERMAL_CAP: AtomicU32 = AtomicU32::new(0);
+
+/// Holds frames to at most `fps` a second, slower than the engine's own
+/// limiter if need be (0: lifts it). Takes effect at the next frame.
+pub fn set_thermal_cap(fps: u32) {
+    THERMAL_CAP.store(fps, Ordering::Relaxed);
+}
+
 /// Hook for `CSystem::EndRender()`.
 pub(crate) unsafe extern "C" fn end_render(env: *mut Env) {
     while BACKGROUND.load(Ordering::Acquire) == 1 {
@@ -62,6 +75,11 @@ pub(crate) unsafe extern "C" fn end_render(env: *mut Env) {
     let hz = (mem.u32(REFRESH) / mem.u32(REFRESH + 4).max(1)) as i32;
     let intervals = mem.i32(INTERVALS);
     let target = if hz > 0 && intervals > 0 { intervals as f32 / hz as f32 } else { UNLIMITED };
+    // The thermal cap is only ever slower than the engine's own.
+    let target = {
+        let cap = THERMAL_CAP.load(Ordering::Relaxed);
+        if cap > 0 { target.max(1.0 / cap as f32) } else { target }
+    };
     let elapsed = (now - last) as f32 * tick;
     let wait = 0.95 * target - elapsed;
     if wait.is_nan() || wait <= 0.0 || tick.is_nan() || tick <= 0.0 {

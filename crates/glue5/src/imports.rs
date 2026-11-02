@@ -341,13 +341,15 @@ fn append_settings(report: &mut String, settings: Option<&crate::settings::Setti
     };
     let _ = writeln!(
         report,
-        "Graphics: scale={:?}, upscaler={:?}, sharpness={:.2}, max_fps={}, vsync={}, frame_generation={}",
+        "Graphics: scale={:?}, upscaler={:?}, sharpness={:.2}, max_fps={}, vsync={}, frame_generation={}, thermal={:?}, preset={:?}",
         settings.render_scale,
         settings.upscaler,
         settings.sharpness,
         settings.max_fps,
         settings.vsync,
         settings.frame_generation,
+        settings.thermal_adapt,
+        settings.graphics_preset,
     );
     let _ = writeln!(
         report,

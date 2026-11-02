@@ -50,6 +50,8 @@ Enter, go back with B or Esc.
 | | **Upscaling** | Bicubic, MetalFX (Apple), MetalFX Temporal (Apple) or FSR 2. Temporal upscalers look sharper and cost more. |
 | | **Frame generation** | With MetalFX Temporal, where the system offers it: a generated frame between each two. |
 | | **Frame rate** | Display (or Unlimited without VSync), 60, 40 (120 Hz screens) or 30. On Apple devices each frame is shown for the same time. |
+| | **Thermal back-off** | Android: as the phone heats up, the game is held to fewer frames per second (40, then 30), and with *Frame rate and resolution* to a smaller image at the last step. Off by default on other systems. |
+| | **Graphics preset** | Android: *Phone* turns the game's own graphics down for the phone — smaller textures, no reflections, no soft shadows, no grass — at the next start. *Off* leaves the game's settings as they are. |
 | | **VSync** | Waits for the display: no tearing. |
 | | **Performance overlay** | Frame times, CPU and GPU time, memory; Metal HUD on Apple devices. |
 | | **GPU driver** | Android phones with a Snapdragon (Adreno GPU): the phone's own driver, or one added with **GPU drivers › Add…** — an Adreno Tools package (`.zip`), such as Mesa's Turnip or a newer Qualcomm build, the kind emulators use. It applies from the next launch. |
@@ -91,8 +93,18 @@ To make it smoother:
 - **Phones get hot.** After a few minutes of play a phone slows its
   processor down to cool off, and the game slows with it. A case off and
   a cool room help.
+- **The thermal back-off** (Android) holds the game to fewer frames per
+  second before the phone's own governor does, and takes the heat back
+  slowly: it is on by default, and the performance overlay shows the
+  phone's state while it plays.
 - **Low memory** keeps devices with less memory from being closed by the
   system.
+- **The graphics preset** (Android) is the phone's answer to the same
+  problem: a phone's GPU reads its textures from memory it shares with
+  everything else, so the *Phone* preset — smaller textures, no
+  reflections, no soft shadows, no grass — buys frames on the GPU that
+  nothing else can. It is written over the game's own settings at the next
+  start; the game's menu has the last word afterwards.
 
 ## Troubleshooting
 

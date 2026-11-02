@@ -6,6 +6,9 @@
 //! there and on Linux each class is also a nice value, Android's own for
 //! such a thread, and interactive threads' timers have no slack.
 
+/// Android's thermal state, and how far to back off for it.
+pub mod thermal;
+
 #[derive(Clone, Copy, Debug)]
 pub enum Qos {
     /// Sound for the device, which plays it as it comes (the engine's mixer
