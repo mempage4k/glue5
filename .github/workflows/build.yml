@@ -11,7 +11,9 @@ on:
         description: Platform
         type: choice
         options: [ios, android, windows, macos, linux-x86_64, linux-aarch64]
-        default: ios
+        # Android is the only officially supported target; the other options
+        # are historical build paths and are not validated.
+        default: android
 
 permissions:
   contents: write
