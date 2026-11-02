@@ -10,8 +10,8 @@ on:
       platform:
         description: Platform
         type: choice
-        options: [ios, android, windows, macos, linux-x86_64, linux-aarch64]
-        default: ios
+        options: [android, ios, windows, macos, linux-x86_64, linux-aarch64]
+        default: android
 
 permissions:
   contents: write

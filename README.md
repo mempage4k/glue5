@@ -128,6 +128,11 @@ Bug reports and fixes for the supported Android target are welcome: read
 [code of conduct](CODE_OF_CONDUCT.md). Historical multi-platform tools and
 notes are retained but are outside the current support scope.
 
+For project coordination, contributors and coding agents use [Linear](docs/linear-workflow.md)
+to track task scope, priorities, decisions, blockers, status and handoffs.
+GitHub remains the source of truth for repository files, branches, commits,
+pull requests and CI results.
+
 ## License
 
 GLUE 5 is free software: you can redistribute it and modify it under the
