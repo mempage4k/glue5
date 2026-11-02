@@ -14,6 +14,10 @@
 - [Building from source](building.md): toolchain, tasks, platforms, options and layout.
 - [Design notes](design.md): stable architecture and design decisions.
 
+**Project coordination**
+
+- [Linear workflow](linear-workflow.md): how contributors and AI agents use Linear for task tracking while GitHub remains the implementation source of truth.
+
 **Engineering investigations**
 
 - [Android performance: Galaxy S21 Plus](android-performance-s21.md): device-specific hypotheses, verification gates and measurements; static review only until validated on hardware.
