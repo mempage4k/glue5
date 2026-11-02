@@ -528,12 +528,59 @@ static PHONE_MOVIE: AtomicU32 = AtomicU32::new(u32::MAX);
 /// and numbers only, nothing the player typed or saw.
 static PHONE_MOVIE_TRACE: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 
+const PHONE_SELECTION_RESULTS_MAX: usize = 16;
+
+#[derive(Clone, Copy)]
+struct PhoneSelectionResult {
+    handle: i32,
+    movie: u32,
+    ready: Option<bool>,
+}
+
+/// Bounded handles for the phone's asynchronous GET_CURRENT_SELECTION call.
+static PHONE_SELECTION_RESULTS: Mutex<VecDeque<PhoneSelectionResult>> = Mutex::new(VecDeque::new());
+
 fn trace_phone_movie(line: String) {
     let mut trace = PHONE_MOVIE_TRACE.lock().unwrap();
     if trace.len() == 64 {
         trace.pop_front();
     }
     trace.push_back(format!("+{}ms {line}", crate::diagnostics_elapsed_ms()));
+}
+
+fn remember_phone_selection_result(handle: i32, movie: u32) {
+    let mut results = PHONE_SELECTION_RESULTS.lock().unwrap();
+    if let Some(index) = results.iter().position(|result| result.handle == handle) {
+        results.remove(index);
+    }
+    if results.len() == PHONE_SELECTION_RESULTS_MAX {
+        results.pop_front();
+    }
+    results.push_back(PhoneSelectionResult { handle, movie, ready: None });
+}
+
+fn note_phone_selection_ready(handle: i32, ready: bool) -> Option<(u32, bool)> {
+    let mut results = PHONE_SELECTION_RESULTS.lock().unwrap();
+    let result = results.iter_mut().find(|result| result.handle == handle)?;
+    let changed = result.ready != Some(ready);
+    result.ready = Some(ready);
+    Some((result.movie, changed))
+}
+
+fn phone_selection_result(handle: i32) -> Option<(u32, Option<bool>)> {
+    PHONE_SELECTION_RESULTS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|result| result.handle == handle)
+        .map(|result| (result.movie, result.ready))
+}
+
+fn forget_phone_selection_result(handle: i32) {
+    let mut results = PHONE_SELECTION_RESULTS.lock().unwrap();
+    if let Some(index) = results.iter().position(|result| result.handle == handle) {
+        results.remove(index);
+    }
 }
 
 /// The phone movie's recent input and view methods, oldest first.
@@ -549,6 +596,8 @@ thread_local! {
     /// (1 `SET_INPUT_EVENT`, 2 `DISPLAY_VIEW`) and how many numbers it has
     /// had, with the first kept (`DISPLAY_VIEW`'s view, for its second).
     static PHONE_METHOD: Cell<Option<(u8, u32, i32)>> = const { Cell::new(None) };
+    /// The phone movie whose GET_CURRENT_SELECTION return handle is next.
+    static PHONE_SELECTION_PENDING: Cell<Option<u32>> = const { Cell::new(None) };
 }
 
 /// Hook for `CScaleformMgr::BeginMethodInternal(int, eSCALEFORM_BASE_CLASS,
@@ -562,11 +611,13 @@ pub(crate) unsafe extern "C" fn method_begin(env: *mut Env, movie: u32, base: u3
     }
     let on_phone = movie == PHONE_MOVIE.load(Ordering::Relaxed);
     PHONE_SLOT.set((is(b"SET_DATA_SLOT\0") && on_phone).then_some(0));
+    PHONE_SELECTION_PENDING.set(None);
     // The phone script's own driving of its movie, for the trace: the
     // selection it asks for (a tap or Select landed), and below, in
     // `param_int`, the steps it sends and the views it shows.
     if on_phone && is(b"GET_CURRENT_SELECTION\0") {
         trace_phone_movie(format!("phone movie {movie}: GET_CURRENT_SELECTION"));
+        PHONE_SELECTION_PENDING.set(Some(movie));
         PHONE_METHOD.set(None);
     } else if on_phone && is(b"SET_INPUT_EVENT\0") {
         PHONE_METHOD.set(Some((1, 0, 0)));
@@ -576,6 +627,72 @@ pub(crate) unsafe extern "C" fn method_begin(env: *mut Env, movie: u32, base: u3
         PHONE_METHOD.set(None);
     }
     unsafe { orig::method_begin(env, movie, base, name, a, b) }
+}
+
+/// Hook for `scrWrapped_END_SCALEFORM_MOVIE_METHOD_RETURN_VALUE::Call`:
+/// the phone's asynchronous selection method's return handle.
+pub(crate) unsafe extern "C" fn scaleform_method_return_end(env: *mut Env, info: u64) {
+    let movie = PHONE_SELECTION_PENDING.with(|pending| pending.take());
+    unsafe { orig::scaleform_method_return_end(env, info) };
+    let Some(movie) = movie else { return };
+    let m = unsafe { Mem::of(env) };
+    let result = m.u64(info);
+    if result == 0 {
+        trace_phone_movie(format!("phone movie {movie}: GET_CURRENT_SELECTION handle unavailable"));
+        return;
+    }
+    let handle = m.i32(result);
+    remember_phone_selection_result(handle, movie);
+    trace_phone_movie(format!("phone movie {movie}: GET_CURRENT_SELECTION handle={handle}"));
+}
+
+/// Hook for `scrWrapped_IS_SCALEFORM_MOVIE_METHOD_RETURN_VALUE_READY::Call`:
+/// observe readiness for a tracked phone selection result.
+pub(crate) unsafe extern "C" fn scaleform_method_return_ready(env: *mut Env, info: u64) {
+    unsafe { orig::scaleform_method_return_ready(env, info) };
+    let m = unsafe { Mem::of(env) };
+    let result = m.u64(info);
+    let argument = m.u64(info + 16);
+    if result == 0 || argument == 0 {
+        return;
+    }
+    let handle = m.i32(argument);
+    let ready = m.u32(result) != 0;
+    if let Some((movie, changed)) = note_phone_selection_ready(handle, ready) {
+        if changed {
+            trace_phone_movie(format!(
+                "phone movie {movie}: GET_CURRENT_SELECTION handle={handle} ready={}",
+                ready as u8
+            ));
+        }
+    }
+}
+
+/// Hook for `scrWrapped_GET_SCALEFORM_MOVIE_METHOD_RETURN_VALUE_INT::Call`:
+/// read the phone's selection result after the original native, without
+/// changing the value returned to the game script.
+pub(crate) unsafe extern "C" fn scaleform_method_return_int(env: *mut Env, info: u64) {
+    unsafe { orig::scaleform_method_return_int(env, info) };
+    let m = unsafe { Mem::of(env) };
+    let result = m.u64(info);
+    let argument = m.u64(info + 16);
+    if result == 0 || argument == 0 {
+        return;
+    }
+    let handle = m.i32(argument);
+    let Some((movie, ready_state)) = phone_selection_result(handle) else { return };
+    let value = m.i32(result);
+    let ready = match ready_state {
+        Some(true) => "1",
+        Some(false) => "0",
+        None => "unknown",
+    };
+    trace_phone_movie(format!(
+        "phone movie {movie}: GET_CURRENT_SELECTION handle={handle} ready={ready} value={value}"
+    ));
+    if ready_state != Some(false) {
+        forget_phone_selection_result(handle);
+    }
 }
 
 /// Hook for `CScaleformMgr::AddParamInt(int)`: the third number of the
@@ -620,6 +737,9 @@ fn off_home(m: Mem) -> bool {
 pub(crate) fn hooks(hooks: &mut glue5_game::Hooks) {
     hooks.method_begin = Some(method_begin);
     hooks.param_int = Some(param_int);
+    hooks.scaleform_method_return_end = Some(scaleform_method_return_end);
+    hooks.scaleform_method_return_ready = Some(scaleform_method_return_ready);
+    hooks.scaleform_method_return_int = Some(scaleform_method_return_int);
     hooks.as_function_invoke = Some(as_function_invoke);
     hooks.user_function_invoke = Some(user_function_invoke);
     hooks.script_model_loaded = Some(model_loaded);
