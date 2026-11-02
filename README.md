@@ -8,9 +8,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mempage4k/glue5/stargazers"><img src="https://img.shields.io/github/stars/mempage4k/glue5?style=for-the-badge&amp;logo=github&amp;color=yellow" alt="GitHub stars"></a>
-  <a href="https://github.com/mempage4k/glue5/forks"><img src="https://img.shields.io/github/forks/mempage4k/glue5?style=for-the-badge&amp;logo=github" alt="GitHub forks"></a>
-  <a href="https://github.com/mempage4k/glue5/commits/next"><img src="https://img.shields.io/github/last-commit/mempage4k/glue5/next?style=for-the-badge&amp;logo=github" alt="Last commit"></a>
+  <a href="https://github.com/luizhegner/glue5/stargazers"><img src="https://img.shields.io/github/stars/luizhegner/glue5?style=for-the-badge&amp;logo=github&amp;color=yellow" alt="GitHub stars"></a>
+  <a href="https://github.com/luizhegner/glue5/forks"><img src="https://img.shields.io/github/forks/luizhegner/glue5?style=for-the-badge&amp;logo=github" alt="GitHub forks"></a>
+  <a href="https://github.com/luizhegner/glue5/commits/main"><img src="https://img.shields.io/github/last-commit/luizhegner/glue5/main?style=for-the-badge&amp;logo=github" alt="Last commit"></a>
   <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&amp;logo=rust&amp;logoColor=white" alt="Rust">
 </p>
 
@@ -76,6 +76,9 @@
 | [Build the Android app on GitHub](docs/github-build.md) | Build from your own `game.wasm`, with no development setup. |
 | [Building from source](docs/building.md) | Toolchain, tasks, platforms, options and the repository's layout. |
 | [Design notes](docs/design.md) | How it works inside: the recompiler, the renderer, streaming, mods. |
+| [Documentation index](docs/README.md) | Where every document lives, including those still on specialist branches. |
+| [CI coverage](docs/ci-coverage.md) | What each workflow really tests — and what it does not. |
+| [Contributing](CONTRIBUTING.md) | Tracker, branches, tests and identification rules. |
 
 ## FAQ
 

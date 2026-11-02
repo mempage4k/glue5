@@ -1,5 +1,6 @@
-//! Glue 5: the game as one application for every platform — desktop (macOS,
-//! Linux, Windows) and mobile (iOS, Android).
+//! Glue 5: the game as one application. Android is the only officially
+//! supported target (Galaxy S21 Plus); the desktop and iOS entry points
+//! below are historical build paths, unsupported and unvalidated.
 //!
 //! The engine runs on its own threads ([`glue5_runtime`]) and renders with
 //! [`glue5_gpu`]; this crate is the platform side, through SDL: window,
