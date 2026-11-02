@@ -542,12 +542,14 @@ const PHONE_HOME: f64 = 1.0;
 const MISSING_APPS: &[i32] = &[57];
 const OFF_HOME: f64 = 25.0;
 
-/// `DISPLAY_VIEW` uses the component-array indices, while `SET_DATA_SLOT`
-/// uses provider IDs. These are the exact `TEXT_MESSAGE_LIST` and
-/// `CONTACTLIST` entries in cellphone_ifruit.gfx and their providers.
+/// The normal movie's message/contact components are indices 17 and 21.
+/// cellphone_flashhand also dispatches them via provider IDs 6 and 2; keep
+/// both forms because `DISPLAY_VIEW` traces expose the script-level IDs.
 const PHONE_VIEW_MESSAGE_LIST: i32 = 17;
+const PHONE_DISPLAY_MESSAGE_LIST: i32 = 6;
 const PHONE_DATA_MESSAGE_LIST: i32 = 6;
 const PHONE_VIEW_CONTACT_LIST: i32 = 21;
+const PHONE_DISPLAY_CONTACT_LIST: i32 = 2;
 const PHONE_DATA_CONTACT_LIST: i32 = 2;
 const PHONE_LIST_ROWS: usize = 5;
 const PHONE_LIST_TOP: f32 = 64.0;
@@ -728,6 +730,35 @@ fn identify_phone_movie(movie: u32, file: &'static str) {
     }
 }
 
+fn note_phone_titlebar_movie(movie: u32) {
+    let previous_movie = PHONE_MOVIE.swap(movie, Ordering::Relaxed);
+    if previous_movie == movie {
+        return;
+    }
+    let file = {
+        let mut current = PHONE_MOVIE_FILE.lock().unwrap();
+        let file = (*current).filter(|(id, _)| *id == previous_movie).map(|(_, file)| file);
+        *current = file.map(|file| (movie, file));
+        file
+    };
+    // The title-bar call is the movie identity actually used by the phone
+    // script. Preserve already observed provider slots if its handle differs
+    // from REQUEST_SCALEFORM_MOVIE's returned ID, but discard view/handles
+    // that belong to the old identity.
+    PHONE_LIST_STATES.lock().unwrap().clear();
+    PHONE_SELECTION_RESULTS.lock().unwrap().clear();
+    PHONE_ACTIVE_VIEW.store(-1, Ordering::Relaxed);
+    PHONE_METHOD.set(None);
+    PHONE_SELECTION_PENDING.set(None);
+    if let Some(file) = file {
+        trace_phone_movie(format!(
+            "phone movie identity rebound old_id={previous_movie} id={movie} file={file} source=SET_TITLEBAR_TIME"
+        ));
+    } else {
+        trace_phone_movie(format!("phone movie identified id={movie} file=unknown source=SET_TITLEBAR_TIME_fallback"));
+    }
+}
+
 fn phone_movie_file(movie: u32) -> &'static str {
     (*PHONE_MOVIE_FILE.lock().unwrap())
         .filter(|(id, _)| *id == movie)
@@ -855,10 +886,18 @@ fn take_direct_phone_selection(correlation: PhoneTapContext, view: i32) -> Optio
     Some(target)
 }
 
+fn phone_list_component_view(display_view: i32) -> i32 {
+    match display_view {
+        PHONE_DISPLAY_MESSAGE_LIST => PHONE_VIEW_MESSAGE_LIST,
+        PHONE_DISPLAY_CONTACT_LIST => PHONE_VIEW_CONTACT_LIST,
+        _ => display_view,
+    }
+}
+
 fn phone_data_view(display_view: i32) -> Option<i32> {
     match display_view {
-        PHONE_VIEW_MESSAGE_LIST => Some(PHONE_DATA_MESSAGE_LIST),
-        PHONE_VIEW_CONTACT_LIST => Some(PHONE_DATA_CONTACT_LIST),
+        PHONE_VIEW_MESSAGE_LIST | PHONE_DISPLAY_MESSAGE_LIST => Some(PHONE_DATA_MESSAGE_LIST),
+        PHONE_VIEW_CONTACT_LIST | PHONE_DISPLAY_CONTACT_LIST => Some(PHONE_DATA_CONTACT_LIST),
         _ => None,
     }
 }
@@ -950,7 +989,8 @@ fn phone_view_slots(view: i32) -> String {
     format_phone_view_slots(slots, PHONE_SLOT_MAP_DROPPED.load(Ordering::Relaxed))
 }
 
-fn note_phone_display_view(view: i32, current_id: Option<i32>) {
+fn note_phone_display_view(display_view: i32, current_id: Option<i32>) {
+    let view = phone_list_component_view(display_view);
     PHONE_ACTIVE_VIEW.store(view, Ordering::Relaxed);
     note_phone_list_view(view, current_id);
 }
@@ -1139,15 +1179,8 @@ thread_local! {
 pub(crate) unsafe extern "C" fn method_begin(env: *mut Env, movie: u32, base: u32, name: u64, a: u32, b: u32) -> u32 {
     let m = unsafe { Mem::of(env) };
     let is = |s: &[u8]| m.bytes(name, s.len()) == s;
-    if is(b"SET_TITLEBAR_TIME\0") && PHONE_MOVIE.load(Ordering::Relaxed) == u32::MAX {
-        // Fallback only: request-time filename recognition below is the
-        // stronger identity signal. Keep the source explicit in the trace.
-        let previous = PHONE_MOVIE.swap(movie, Ordering::Relaxed);
-        *PHONE_MOVIE_FILE.lock().unwrap() = None;
-        if previous != movie {
-            clear_phone_movie_state();
-        }
-        trace_phone_movie(format!("phone movie identified id={movie} file=unknown source=SET_TITLEBAR_TIME_fallback"));
+    if is(b"SET_TITLEBAR_TIME\0") {
+        note_phone_titlebar_movie(movie);
     }
     let on_phone = movie == PHONE_MOVIE.load(Ordering::Relaxed);
     PHONE_SELECTION_PENDING.set(None);
@@ -1427,13 +1460,22 @@ fn phone_call_arguments(m: Mem, method: &str, args: u64, count: u32) -> String {
 /// calls near a delivered direct tap. String contents are omitted except for
 /// static app/icon identifiers; no pointer coordinates or user-entered text are included.
 pub(crate) fn trace_phone_scaleform_call(env: *mut Env, movie: u32, name: u64, args: u64, count: u32, instantly: u32) {
-    if movie != PHONE_MOVIE.load(Ordering::Relaxed) || name == 0 || (count != 0 && args == 0) {
+    if name == 0 || (count != 0 && args == 0) {
         return;
     }
     let m = unsafe { Mem::of(env) };
+    if movie != PHONE_MOVIE.load(Ordering::Relaxed) && m.bytes(name, 18) != b"SET_TITLEBAR_TIME\0" {
+        return;
+    }
     let method_bytes = m.bytes(name, 28);
     let method_end = method_bytes.iter().position(|&byte| byte == 0).unwrap_or(method_bytes.len());
     let Ok(method) = std::str::from_utf8(&method_bytes[..method_end]) else { return };
+    if method == "SET_TITLEBAR_TIME" {
+        note_phone_titlebar_movie(movie);
+    }
+    if movie != PHONE_MOVIE.load(Ordering::Relaxed) {
+        return;
+    }
     match method {
         "DISPLAY_VIEW" => {
             if let Some(view) = phone_call_int_argument(m, args, count, 0) {
@@ -1590,9 +1632,14 @@ mod tests {
 
     #[test]
     fn message_and_contact_list_views_map_to_their_separate_data_providers() {
+        assert_eq!(phone_list_component_view(PHONE_DISPLAY_MESSAGE_LIST), PHONE_VIEW_MESSAGE_LIST);
+        assert_eq!(phone_list_component_view(PHONE_DISPLAY_CONTACT_LIST), PHONE_VIEW_CONTACT_LIST);
         assert_eq!(phone_data_view(PHONE_VIEW_MESSAGE_LIST), Some(PHONE_DATA_MESSAGE_LIST));
+        assert_eq!(phone_data_view(PHONE_DISPLAY_MESSAGE_LIST), Some(PHONE_DATA_MESSAGE_LIST));
         assert_eq!(phone_data_view(PHONE_VIEW_CONTACT_LIST), Some(PHONE_DATA_CONTACT_LIST));
-        assert_eq!(phone_data_view(22), None, "the home grid is not a scrolling list");
+        assert_eq!(phone_data_view(PHONE_DISPLAY_CONTACT_LIST), Some(PHONE_DATA_CONTACT_LIST));
+        assert_eq!(phone_data_view(1), None, "the home grid is not a scrolling list");
+        assert_eq!(phone_data_view(22), None, "other movie components are not scrolling lists");
     }
 
     #[test]
