@@ -11,13 +11,17 @@ on:
         description: Platform
         type: choice
         options: [android, ios, windows, macos, linux-x86_64, linux-aarch64]
+        # Android is the only officially supported target; the other options
+        # are historical build paths and are not validated.
         default: android
 
 permissions:
   contents: write
 
 concurrency:
-  group: build-${{ inputs.platform }}
+  # One queue per branch: a build on another Arena branch must not
+  # cancel this one before its APK reaches the draft.
+  group: build-${{ inputs.platform }}-${{ github.ref }}
 
 jobs:
   build:
@@ -145,28 +149,35 @@ jobs:
       # build is read there, without downloading the run's log.
       - name: Build
         run: |
+          # Every Arena branch used to upload the same Glue5-android.apk to
+          # the same draft, and draft.sh replaces a file of the same name:
+          # the previous branch's APK was lost. Carry branch + commit in the
+          # name so builds stay distinguishable after download.
+          build_id=${GITHUB_REF_NAME//\//-}-${GITHUB_SHA:0:7}
+          echo "Build identity: $build_id"
+          echo "BUILD_ID=$build_id" >>"$GITHUB_ENV"
           build() {
               case $PLATFORM in
               ios)
                   mise run ios:ipa
-                  mv target/ios/Glue5.ipa Glue5-ios.ipa
+                  mv target/ios/Glue5.ipa "Glue5-ios-${build_id}.ipa"
                   ;;
               windows)
                   mise run build
-                  mv target/release/glue5.exe Glue5-windows.exe
+                  mv target/release/glue5.exe "Glue5-windows-${build_id}.exe"
                   ;;
               macos)
                   mise run macos:package
-                  mv target/package/*.dmg Glue5-macos.dmg
+                  mv target/package/*.dmg "Glue5-macos-${build_id}.dmg"
                   ;;
               android)
                   mise run android:build
-                  mv target/android/gradle/outputs/apk/release/Glue5-release.apk Glue5-android.apk
+                  mv target/android/gradle/outputs/apk/release/Glue5-release.apk "Glue5-android-${build_id}.apk"
                   cp ~/.android/debug.keystore Glue5-android.keystore
                   ;;
               linux-*)
                   mise run linux:container "${PLATFORM#linux-}"
-                  mv target/package/*.AppImage "Glue5-$PLATFORM.AppImage"
+                  mv target/package/*.AppImage "Glue5-$PLATFORM-${build_id}.AppImage"
                   ;;
               esac
           }
@@ -179,8 +190,16 @@ jobs:
 
       - name: Into the draft release
         run: |
+          {
+              echo "branch:   $GITHUB_REF_NAME"
+              echo "commit:   $GITHUB_SHA"
+              echo "subject:  $(git log -1 --format=%s)"
+              echo "platform: $PLATFORM"
+              echo "built:    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo "run:      $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } >"Glue5-BUILD-${BUILD_ID}.txt"
           .github/scripts/draft.sh upload "${{ steps.game.outputs.release }}" Glue5-*
-          echo "Built for $PLATFORM: the files are in the draft release, under $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases (keep it a draft)." >>"$GITHUB_STEP_SUMMARY"
+          echo "Built $PLATFORM from $GITHUB_REF_NAME at ${GITHUB_SHA:0:7}: the files are Glue5-$PLATFORM-${BUILD_ID}.* in the draft release (keep it a draft)." >>"$GITHUB_STEP_SUMMARY"
 
       # A failed build is read here: the log is pushed to a branch of its own,
       # `ci/build-diagnostics`, so that the errors can be read (and quoted in a
