@@ -26,6 +26,10 @@ Open an issue with:
 For a security problem (for example in online play or the Studio), don't
 open an issue: report it privately from the repository's **Security** tab.
 
+## Project tracking and AI agents
+
+Use the GLU team and `P-GLU-1` project in Linear for task scope, priorities, decisions, blockers, acceptance criteria and handoffs. Search for an existing issue before creating one, and keep its status and comments aligned with verified work. Use [the Linear workflow](docs/linear-workflow.md) for the detailed coordination and AI-identification rules. GitHub remains authoritative for code, branches, commits, pull requests and CI results.
+
 ## Making a change
 
 1. Read [Building from source](docs/building.md) to set up the toolchain,
