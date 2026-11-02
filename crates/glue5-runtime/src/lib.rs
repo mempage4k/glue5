@@ -296,6 +296,11 @@ pub fn phone_movie_diagnostics() -> Vec<String> {
     script_assets::phone_movie_diagnostics()
 }
 
+/// Tag the mouse-down that carries a direct touch on the game phone.
+pub fn note_phone_touch_tap(tap_id: u64) {
+    script_assets::note_phone_touch_tap(tap_id);
+}
+
 /// A running game.
 pub struct Game {
     engine: JoinHandle<i32>,

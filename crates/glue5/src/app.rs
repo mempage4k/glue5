@@ -1087,6 +1087,9 @@ impl App {
                         }
                     }
                 }
+                if let Some(tap_id) = mouse.phone_tap_id {
+                    glue5_runtime::note_phone_touch_tap(tap_id);
+                }
                 if mouse.down != self.touch_mouse.down {
                     input.mouse_button(mouse::LEFT, mouse.down);
                 }

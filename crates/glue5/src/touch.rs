@@ -759,6 +759,9 @@ pub struct Mouse {
     pub down: bool,
     /// Wheel notches, + = up (zoom in).
     pub wheel: i32,
+    /// The sequence ID of a direct phone tap whose mouse-down is this frame.
+    /// It is diagnostic only; no touch position is included.
+    pub phone_tap_id: Option<u64>,
     /// The menu's keys held, by [`MenuKey`].
     pub keys: [bool; 6],
 }
@@ -843,6 +846,10 @@ pub struct Touch {
     /// Phone-screen gestures and the separate virtual phone keys, without
     /// recording finger coordinates.
     phone_touch_events: VecDeque<String>,
+    /// Direct phone taps, identified from touch lift until their mouse-down
+    /// reaches the game input block.
+    phone_tap_seq: u64,
+    phone_tap_pending: Option<u64>,
 }
 
 /// Two fingers in the pause menu: how far apart they were last and the
@@ -933,6 +940,8 @@ impl Touch {
             diagnostic_pad: None,
             diagnostic_events: VecDeque::new(),
             phone_touch_events: VecDeque::new(),
+            phone_tap_seq: 0,
+            phone_tap_pending: None,
         }
     }
 
@@ -1104,8 +1113,10 @@ impl Touch {
             self.pressed &= !released;
             self.pressed_inputs.clear();
             self.click = None;
+            self.phone_tap_pending = None;
         }
         if phone_closed {
+            self.phone_tap_pending = None;
             // The phone's keys are gone with it: one still held (Back, say)
             // must not go on pressing in play under its old name. Keep the
             // release reason in the semantic trace if Back itself closed it.
@@ -2008,7 +2019,8 @@ impl Touch {
         let wheel = self.wheel.trunc();
         self.wheel -= wheel;
         let at = self.mouse_at.map(|p| pos2(p.x / self.screen.x, p.y / self.screen.y));
-        Mouse { at, down, wheel: wheel as i32, keys }
+        let phone_tap_id = if down { self.phone_tap_pending.take() } else { None };
+        Mouse { at, down, wheel: wheel as i32, phone_tap_id, keys }
     }
 
     pub fn finger_motion(&mut self, id: u64, x: f32, y: f32) {
@@ -2257,7 +2269,12 @@ impl Touch {
                 // a separate bridge. Do not synthesize a gamepad South press.
                 let from = Instant::now();
                 self.click = Some((from, from + MIN_PRESS));
-                self.record_phone_touch_diagnostic("phone_screen gesture=tap outcome=mouse_click".to_owned());
+                self.phone_tap_seq = self.phone_tap_seq.wrapping_add(1).max(1);
+                let tap_id = self.phone_tap_seq;
+                self.phone_tap_pending = Some(tap_id);
+                self.record_phone_touch_diagnostic(format!(
+                    "phone_screen tap_seq_id={tap_id} gesture=tap outcome=mouse_click"
+                ));
                 if self.haptics {
                     haptics::tap();
                 }
@@ -2357,6 +2374,7 @@ impl Touch {
         self.locked_stick = Vec2::ZERO;
         self.sprint_since = None;
         self.click = None;
+        self.phone_tap_pending = None;
         self.key_until = [None; 6];
         self.wheel = 0.0;
         self.steps = 0.0;

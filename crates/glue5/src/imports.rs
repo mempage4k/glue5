@@ -410,9 +410,12 @@ fn append_input_diagnostics(report: &mut String, events: &[String]) {
 fn append_phone_movie_diagnostics(report: &mut String, events: &[String]) {
     use std::fmt::Write as _;
 
-    let _ = writeln!(report, "\nRecent phone movie methods (how the game's phone script drove its movie):");
+    let _ = writeln!(
+        report,
+        "\nRecent phone selection/action trace (tap IDs correlate touch, selection return and app-script requests; no pointer hit-test is inferred):"
+    );
     if events.is_empty() {
-        report.push_str("(no phone movie methods recorded)\n");
+        report.push_str("(no phone selection/action events recorded)\n");
         return;
     }
     for event in events {

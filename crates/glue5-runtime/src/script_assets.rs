@@ -69,7 +69,7 @@
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 use glue5_game::{Env, exports, orig};
 
@@ -85,9 +85,35 @@ fn for_missing_place(m: Mem, name: u64) -> bool {
 
 /// Hook for `script_commands::RequestScript(char const*)`: REQUEST_SCRIPT.
 pub(crate) unsafe extern "C" fn script_request(env: *mut Env, name: u64) {
-    if !for_missing_place(unsafe { Mem::of(env) }, name) {
+    let mem = unsafe { Mem::of(env) };
+    if let Some(tap_id) = recent_phone_tap_id()
+        && let Some(script) = phone_app_script_name(mem, name)
+    {
+        trace_phone_tap(Some(tap_id), format!("phone script REQUEST_SCRIPT name={script}"));
+    }
+    if !for_missing_place(mem, name) {
         unsafe { orig::script_request(env, name) };
     }
+}
+
+/// A bounded, static phone/app script identifier useful for correlating the
+/// existing selection path with its request. Never trace arbitrary script text.
+fn phone_app_script_name(m: Mem, name: u64) -> Option<String> {
+    if name == 0 {
+        return None;
+    }
+    let bytes = m.bytes(name, 64);
+    let end = bytes.iter().position(|&byte| byte == 0)?;
+    if end == 0 || end > 63 {
+        return None;
+    }
+    let script = std::str::from_utf8(&bytes[..end]).ok()?;
+    if !script.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')) {
+        return None;
+    }
+    let lower = script.to_ascii_lowercase();
+    (lower.starts_with("app") || lower.starts_with("cellphone_") || lower.starts_with("cell_"))
+        .then(|| script.to_owned())
 }
 
 /// Hook for `script_commands::HasScriptLoaded(char const*)`:
@@ -517,38 +543,110 @@ const METHOD_SIZE: u64 = 424;
 const PARAMS: u64 = 56;
 const PARAM_COUNT: u64 = 408;
 const NUMBER: u32 = 1;
+const GFX_VALUE: u64 = 24;
+const GFX_BOOL: u32 = 2;
+const GFX_NUMBER: u32 = 3;
+const GFX_STRING: u32 = 4;
 
 /// The phone's movie: the one its title bar's time goes to.
 static PHONE_MOVIE: AtomicU32 = AtomicU32::new(u32::MAX);
 
-/// The phone movie's recent input and view methods, for the support
-/// report: how the game's own phone script drives the movie (selection
-/// steps, views shown, selections asked for), so a tap that opens the
-/// wrong app can be told from what the script sent. Bounded; method names
-/// and numbers only, nothing the player typed or saw.
+/// The phone movie's recent input, selection and app-dispatch events, for the
+/// support report: how the game's phone script responds to a direct tap.
+/// Bounded; static method/script identifiers and semantic numbers only, with
+/// no phone labels, user-entered text or pointer coordinates.
 static PHONE_MOVIE_TRACE: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 
 const PHONE_SELECTION_RESULTS_MAX: usize = 16;
+const PHONE_SLOT_MAP_MAX: usize = 64;
+const PHONE_TAP_WINDOW_MS: u128 = 2_500;
+
+#[derive(Clone, Copy)]
+struct PhoneTapContext {
+    sequence: u64,
+    at_ms: u128,
+}
+
+static PHONE_TAP_CONTEXT: Mutex<Option<PhoneTapContext>> = Mutex::new(None);
 
 #[derive(Clone, Copy)]
 struct PhoneSelectionResult {
     handle: i32,
     movie: u32,
+    tap_id: Option<u64>,
+    view: i32,
     ready: Option<bool>,
 }
 
-/// Bounded handles for the phone's asynchronous GET_CURRENT_SELECTION call.
+#[derive(Clone, Copy)]
+struct PhoneSlot {
+    view: i32,
+    slot: i32,
+    icon: i32,
+}
+
+/// Bounded handles and slot metadata for the phone's asynchronous selection.
 static PHONE_SELECTION_RESULTS: Mutex<VecDeque<PhoneSelectionResult>> = Mutex::new(VecDeque::new());
+static PHONE_SLOT_MAP: Mutex<VecDeque<PhoneSlot>> = Mutex::new(VecDeque::new());
+static PHONE_ACTIVE_VIEW: AtomicI32 = AtomicI32::new(-1);
 
 fn trace_phone_movie(line: String) {
     let mut trace = PHONE_MOVIE_TRACE.lock().unwrap();
-    if trace.len() == 64 {
+    if trace.len() == 128 {
         trace.pop_front();
     }
     trace.push_back(format!("+{}ms {line}", crate::diagnostics_elapsed_ms()));
 }
 
-fn remember_phone_selection_result(handle: i32, movie: u32) {
+fn trace_phone_tap(tap_id: Option<u64>, line: String) {
+    let line = match tap_id {
+        Some(id) => format!("tap_seq_id={id} {line}"),
+        None => line,
+    };
+    trace_phone_movie(line);
+}
+
+pub(crate) fn note_phone_touch_tap(sequence: u64) {
+    let at_ms = crate::diagnostics_elapsed_ms();
+    *PHONE_TAP_CONTEXT.lock().unwrap() = Some(PhoneTapContext { sequence, at_ms });
+    trace_phone_movie(format!("tap_seq_id={sequence} input=mouse_left_down"));
+}
+
+fn recent_phone_tap_id() -> Option<u64> {
+    let now = crate::diagnostics_elapsed_ms();
+    (*PHONE_TAP_CONTEXT.lock().unwrap())
+        .filter(|tap| now.saturating_sub(tap.at_ms) <= PHONE_TAP_WINDOW_MS)
+        .map(|tap| tap.sequence)
+}
+
+fn remember_phone_slot(view: i32, slot: i32, icon: i32) {
+    let mut slots = PHONE_SLOT_MAP.lock().unwrap();
+    if let Some(index) = slots.iter().position(|entry| entry.view == view && entry.slot == slot) {
+        slots.remove(index);
+    }
+    if slots.len() == PHONE_SLOT_MAP_MAX {
+        slots.pop_front();
+    }
+    slots.push_back(PhoneSlot { view, slot, icon });
+}
+
+fn forget_phone_slot(view: i32, slot: i32) {
+    let mut slots = PHONE_SLOT_MAP.lock().unwrap();
+    if let Some(index) = slots.iter().position(|entry| entry.view == view && entry.slot == slot) {
+        slots.remove(index);
+    }
+}
+
+fn phone_slot_icon(view: i32, slot: i32) -> Option<i32> {
+    PHONE_SLOT_MAP
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|entry| entry.view == view && entry.slot == slot)
+        .map(|entry| entry.icon)
+}
+
+fn remember_phone_selection_result(handle: i32, movie: u32, tap_id: Option<u64>, view: i32) {
     let mut results = PHONE_SELECTION_RESULTS.lock().unwrap();
     if let Some(index) = results.iter().position(|result| result.handle == handle) {
         results.remove(index);
@@ -556,24 +654,24 @@ fn remember_phone_selection_result(handle: i32, movie: u32) {
     if results.len() == PHONE_SELECTION_RESULTS_MAX {
         results.pop_front();
     }
-    results.push_back(PhoneSelectionResult { handle, movie, ready: None });
+    results.push_back(PhoneSelectionResult { handle, movie, tap_id, view, ready: None });
 }
 
-fn note_phone_selection_ready(handle: i32, ready: bool) -> Option<(u32, bool)> {
+fn note_phone_selection_ready(handle: i32, ready: bool) -> Option<(u32, Option<u64>, bool)> {
     let mut results = PHONE_SELECTION_RESULTS.lock().unwrap();
     let result = results.iter_mut().find(|result| result.handle == handle)?;
     let changed = result.ready != Some(ready);
     result.ready = Some(ready);
-    Some((result.movie, changed))
+    Some((result.movie, result.tap_id, changed))
 }
 
-fn phone_selection_result(handle: i32) -> Option<(u32, Option<bool>)> {
+fn phone_selection_result(handle: i32) -> Option<(u32, Option<u64>, i32, Option<bool>)> {
     PHONE_SELECTION_RESULTS
         .lock()
         .unwrap()
         .iter()
         .find(|result| result.handle == handle)
-        .map(|result| (result.movie, result.ready))
+        .map(|result| (result.movie, result.tap_id, result.view, result.ready))
 }
 
 fn forget_phone_selection_result(handle: i32) {
@@ -583,21 +681,39 @@ fn forget_phone_selection_result(handle: i32) {
     }
 }
 
-/// The phone movie's recent input and view methods, oldest first.
+/// Recent phone-tap, movie-selection and app-script events, oldest first.
 pub fn phone_movie_diagnostics() -> Vec<String> {
     PHONE_MOVIE_TRACE.lock().unwrap().iter().cloned().collect()
 }
 
+#[derive(Clone, Copy)]
+enum PhoneMethodKind {
+    Input,
+    View,
+    DataSlot,
+    EmptySlot,
+}
+
+#[derive(Clone, Copy)]
+struct PhoneMethodTrace {
+    kind: PhoneMethodKind,
+    int_count: u32,
+    first: i32,
+    second: i32,
+    tap_id: Option<u64>,
+}
+
+impl PhoneMethodTrace {
+    const fn new(kind: PhoneMethodKind, tap_id: Option<u64>) -> Self {
+        Self { kind, int_count: 0, first: 0, second: 0, tap_id }
+    }
+}
+
 thread_local! {
-    /// A `SET_DATA_SLOT` for the phone is being built on this thread: the
-    /// numbers given it so far.
-    static PHONE_SLOT: Cell<Option<u32>> = const { Cell::new(None) };
-    /// A phone method being built whose numbers the trace wants: its kind
-    /// (1 `SET_INPUT_EVENT`, 2 `DISPLAY_VIEW`) and how many numbers it has
-    /// had, with the first kept (`DISPLAY_VIEW`'s view, for its second).
-    static PHONE_METHOD: Cell<Option<(u8, u32, i32)>> = const { Cell::new(None) };
-    /// The phone movie whose GET_CURRENT_SELECTION return handle is next.
-    static PHONE_SELECTION_PENDING: Cell<Option<u32>> = const { Cell::new(None) };
+    /// A phone Scaleform method whose integer parameters are being traced.
+    static PHONE_METHOD: Cell<Option<PhoneMethodTrace>> = const { Cell::new(None) };
+    /// Phone movie, tap ID and active view for the pending selection handle.
+    static PHONE_SELECTION_PENDING: Cell<Option<(u32, Option<u64>, i32)>> = const { Cell::new(None) };
 }
 
 /// Hook for `CScaleformMgr::BeginMethodInternal(int, eSCALEFORM_BASE_CLASS,
@@ -610,19 +726,26 @@ pub(crate) unsafe extern "C" fn method_begin(env: *mut Env, movie: u32, base: u3
         PHONE_MOVIE.store(movie, Ordering::Relaxed);
     }
     let on_phone = movie == PHONE_MOVIE.load(Ordering::Relaxed);
-    PHONE_SLOT.set((is(b"SET_DATA_SLOT\0") && on_phone).then_some(0));
     PHONE_SELECTION_PENDING.set(None);
-    // The phone script's own driving of its movie, for the trace: the
-    // selection it asks for (a tap or Select landed), and below, in
-    // `param_int`, the steps it sends and the views it shows.
+    let tap_id = recent_phone_tap_id();
+    // The phone script's own selection query and its surrounding methods,
+    // correlated to the most recent delivered phone tap when one is close.
     if on_phone && is(b"GET_CURRENT_SELECTION\0") {
-        trace_phone_movie(format!("phone movie {movie}: GET_CURRENT_SELECTION"));
-        PHONE_SELECTION_PENDING.set(Some(movie));
+        let view = PHONE_ACTIVE_VIEW.load(Ordering::Relaxed);
+        trace_phone_tap(
+            tap_id,
+            format!("phone movie {movie}: GET_CURRENT_SELECTION begin active_view={view}"),
+        );
+        PHONE_SELECTION_PENDING.set(Some((movie, tap_id, view)));
         PHONE_METHOD.set(None);
     } else if on_phone && is(b"SET_INPUT_EVENT\0") {
-        PHONE_METHOD.set(Some((1, 0, 0)));
+        PHONE_METHOD.set(Some(PhoneMethodTrace::new(PhoneMethodKind::Input, tap_id)));
     } else if on_phone && is(b"DISPLAY_VIEW\0") {
-        PHONE_METHOD.set(Some((2, 0, 0)));
+        PHONE_METHOD.set(Some(PhoneMethodTrace::new(PhoneMethodKind::View, tap_id)));
+    } else if on_phone && is(b"SET_DATA_SLOT\0") {
+        PHONE_METHOD.set(Some(PhoneMethodTrace::new(PhoneMethodKind::DataSlot, tap_id)));
+    } else if on_phone && is(b"SET_DATA_SLOT_EMPTY\0") {
+        PHONE_METHOD.set(Some(PhoneMethodTrace::new(PhoneMethodKind::EmptySlot, tap_id)));
     } else {
         PHONE_METHOD.set(None);
     }
@@ -632,18 +755,18 @@ pub(crate) unsafe extern "C" fn method_begin(env: *mut Env, movie: u32, base: u3
 /// Hook for `scrWrapped_END_SCALEFORM_MOVIE_METHOD_RETURN_VALUE::Call`:
 /// the phone's asynchronous selection method's return handle.
 pub(crate) unsafe extern "C" fn scaleform_method_return_end(env: *mut Env, info: u64) {
-    let movie = PHONE_SELECTION_PENDING.with(|pending| pending.take());
+    let pending = PHONE_SELECTION_PENDING.with(|pending| pending.take());
     unsafe { orig::scaleform_method_return_end(env, info) };
-    let Some(movie) = movie else { return };
+    let Some((movie, tap_id, view)) = pending else { return };
     let m = unsafe { Mem::of(env) };
     let result = m.u64(info);
     if result == 0 {
-        trace_phone_movie(format!("phone movie {movie}: GET_CURRENT_SELECTION handle unavailable"));
+        trace_phone_tap(tap_id, format!("phone movie {movie}: GET_CURRENT_SELECTION handle unavailable"));
         return;
     }
     let handle = m.i32(result);
-    remember_phone_selection_result(handle, movie);
-    trace_phone_movie(format!("phone movie {movie}: GET_CURRENT_SELECTION handle={handle}"));
+    remember_phone_selection_result(handle, movie, tap_id, view);
+    trace_phone_tap(tap_id, format!("phone movie {movie}: GET_CURRENT_SELECTION handle={handle}"));
 }
 
 /// Hook for `scrWrapped_IS_SCALEFORM_MOVIE_METHOD_RETURN_VALUE_READY::Call`:
@@ -658,12 +781,15 @@ pub(crate) unsafe extern "C" fn scaleform_method_return_ready(env: *mut Env, inf
     }
     let handle = m.i32(argument);
     let ready = m.u32(result) != 0;
-    if let Some((movie, changed)) = note_phone_selection_ready(handle, ready) {
+    if let Some((movie, tap_id, changed)) = note_phone_selection_ready(handle, ready) {
         if changed {
-            trace_phone_movie(format!(
-                "phone movie {movie}: GET_CURRENT_SELECTION handle={handle} ready={}",
-                ready as u8
-            ));
+            trace_phone_tap(
+                tap_id,
+                format!(
+                    "phone movie {movie}: GET_CURRENT_SELECTION handle={handle} ready={}",
+                    ready as u8
+                ),
+            );
         }
     }
 }
@@ -680,41 +806,196 @@ pub(crate) unsafe extern "C" fn scaleform_method_return_int(env: *mut Env, info:
         return;
     }
     let handle = m.i32(argument);
-    let Some((movie, ready_state)) = phone_selection_result(handle) else { return };
+    let Some((movie, tap_id, view, ready_state)) = phone_selection_result(handle) else { return };
     let value = m.i32(result);
     let ready = match ready_state {
         Some(true) => "1",
         Some(false) => "0",
         None => "unknown",
     };
-    trace_phone_movie(format!(
-        "phone movie {movie}: GET_CURRENT_SELECTION handle={handle} ready={ready} value={value}"
-    ));
+    let slot_mapping = if view >= 0 {
+        phone_slot_icon(view, value).map_or_else(
+            || format!("active_view={view} slot_icon=unknown"),
+            |icon| format!("active_view={view} slot_icon={icon}"),
+        )
+    } else {
+        "active_view=unknown slot_icon=unknown".to_owned()
+    };
+    trace_phone_tap(
+        tap_id,
+        format!(
+            "phone movie {movie}: GET_CURRENT_SELECTION handle={handle} ready={ready} selection={value} {slot_mapping}"
+        ),
+    );
     if ready_state != Some(false) {
         forget_phone_selection_result(handle);
     }
 }
 
-/// Hook for `CScaleformMgr::AddParamInt(int)`: the third number of the
-/// phone's `SET_DATA_SLOT` is the app's icon.
+/// Hook for `CScaleformMgr::AddParamInt(int)`: phone selection methods and
+/// the view/slot/icon numbers needed to interpret the asynchronous result.
 pub(crate) unsafe extern "C" fn param_int(env: *mut Env, value: u32) {
-    if let Some(n) = PHONE_SLOT.get() {
-        PHONE_SLOT.set(Some(n + 1));
-        if n == 2 && MISSING_APPS.contains(&(value as i32)) {
-            off_home(unsafe { Mem::of(env) });
-        }
-    }
-    if let Some((kind, n, first)) = PHONE_METHOD.get() {
-        PHONE_METHOD.set(Some((kind, n + 1, if n == 0 { value as i32 } else { first })));
-        match (kind, n) {
-            // The phone's steps and choices: 1 up, 2 right, 3 down, 4 left
-            // (the movie's own numbering, as its script sends them).
-            (1, 0) => trace_phone_movie(format!("phone movie: SET_INPUT_EVENT({})", value as i32)),
-            (2, 1) => trace_phone_movie(format!("phone movie: DISPLAY_VIEW({first}, {})", value as i32)),
+    if let Some(mut method) = PHONE_METHOD.get() {
+        let value = value as i32;
+        match method.kind {
+            PhoneMethodKind::Input if method.int_count == 0 => {
+                trace_phone_tap(method.tap_id, format!("phone movie: SET_INPUT_EVENT({value})"));
+            }
+            PhoneMethodKind::View => match method.int_count {
+                0 => {
+                    method.first = value;
+                    PHONE_ACTIVE_VIEW.store(value, Ordering::Relaxed);
+                }
+                1 => {
+                    method.second = value;
+                    trace_phone_tap(
+                        method.tap_id,
+                        format!("phone movie: DISPLAY_VIEW({}, {})", method.first, method.second),
+                    );
+                }
+                _ => {}
+            },
+            PhoneMethodKind::DataSlot => match method.int_count {
+                0 => method.first = value,
+                1 => method.second = value,
+                2 => {
+                    let view = if MISSING_APPS.contains(&value) && off_home(unsafe { Mem::of(env) }) {
+                        OFF_HOME as i32
+                    } else {
+                        method.first
+                    };
+                    remember_phone_slot(view, method.second, value);
+                }
+                _ => {}
+            },
+            PhoneMethodKind::EmptySlot => match method.int_count {
+                0 => method.first = value,
+                1 => {
+                    method.second = value;
+                    forget_phone_slot(method.first, method.second);
+                }
+                _ => {}
+            },
             _ => {}
         }
+        method.int_count += 1;
+        PHONE_METHOD.set(Some(method));
     }
-    unsafe { orig::param_int(env, value) }
+    unsafe { orig::param_int(env, value as u32) }
+}
+
+fn phone_action_method(method: &str) -> bool {
+    matches!(
+        method,
+        "DISPLAY_VIEW"
+            | "SET_DATA_SLOT"
+            | "SET_DATA_SLOT_EMPTY"
+            | "SET_INPUT_EVENT"
+            | "GET_CURRENT_SELECTION"
+            | "LOAD_APP"
+            | "CELLPHONE_APP"
+            | "OPEN_APP"
+            | "SET_APP"
+            | "SET_CURRENT_APP"
+    ) || ["APP", "CONTACT", "MESSAGE", "SELECTION", "SLOT", "VIEW"]
+        .iter()
+        .any(|word| method.contains(word))
+}
+
+fn safe_phone_token(m: Mem, value: u64) -> Option<String> {
+    if m.u32(value + 8) & 0x8F != GFX_STRING {
+        return None;
+    }
+    let flags = m.u8(value + 8);
+    let mut at = m.u64(value + 16);
+    if at == 0 {
+        return None;
+    }
+    if flags & 0x40 != 0 {
+        at = m.u64(at);
+    }
+    if at == 0 {
+        return None;
+    }
+    let bytes = m.bytes(at, 49);
+    let end = bytes.iter().position(|&byte| byte == 0)?;
+    if end == 0 || end > 48 {
+        return None;
+    }
+    let token = std::str::from_utf8(&bytes[..end]).ok()?;
+    let upper = token.to_ascii_uppercase();
+    let safe = token.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+        && ["CELL_", "APP_", "ICON_", "CELLPHONE_"]
+            .iter()
+            .any(|prefix| upper.starts_with(prefix));
+    safe.then(|| token.to_owned())
+}
+
+fn phone_call_arguments(m: Mem, method: &str, args: u64, count: u32) -> String {
+    let numeric_method = matches!(
+        method,
+        "DISPLAY_VIEW" | "SET_DATA_SLOT" | "SET_DATA_SLOT_EMPTY" | "SET_INPUT_EVENT"
+    );
+    if !numeric_method {
+        let identifiers = (0..count.min(6) as u64)
+            .filter_map(|i| safe_phone_token(m, args + i * GFX_VALUE))
+            .collect::<Vec<_>>();
+        return if identifiers.is_empty() {
+            format!("argc={count}")
+        } else {
+            format!("argc={count} ids=[{}]", identifiers.join(","))
+        };
+    }
+    let argument_limit = match method {
+        "DISPLAY_VIEW" => 2,
+        "SET_DATA_SLOT" => 3,
+        "SET_DATA_SLOT_EMPTY" => 2,
+        "SET_INPUT_EVENT" => 1,
+        _ => 0,
+    };
+    let values = (0..count.min(argument_limit) as u64)
+        .map(|i| {
+            let value = args + i * GFX_VALUE;
+            let kind = m.u32(value + 8) & 0x8F;
+            match kind {
+                GFX_NUMBER => {
+                    let number = m.f64(value + 16);
+                    if number.is_finite()
+                        && number.fract() == 0.0
+                        && (i32::MIN as f64..=i32::MAX as f64).contains(&number)
+                    {
+                        (number as i32).to_string()
+                    } else {
+                        "number".to_owned()
+                    }
+                }
+                GFX_BOOL => format!("bool:{}", m.u8(value + 16) != 0),
+                GFX_STRING => safe_phone_token(m, value).unwrap_or_else(|| "text".to_owned()),
+                _ => "other".to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("args=[{values}]")
+}
+
+/// Record only semantic phone-movie calls near a delivered direct tap.
+/// String contents are omitted except for static app/icon identifiers; no
+/// pointer coordinates or user-entered text are included.
+pub(crate) fn trace_phone_scaleform_call(env: *mut Env, movie: u32, name: u64, args: u64, count: u32) {
+    if movie != PHONE_MOVIE.load(Ordering::Relaxed) || name == 0 || (count != 0 && args == 0) {
+        return;
+    }
+    let Some(tap_id) = recent_phone_tap_id() else { return };
+    let m = unsafe { Mem::of(env) };
+    let method_bytes = m.bytes(name, 28);
+    let method_end = method_bytes.iter().position(|&byte| byte == 0).unwrap_or(method_bytes.len());
+    let Ok(method) = std::str::from_utf8(&method_bytes[..method_end]) else { return };
+    if !phone_action_method(method) {
+        return;
+    }
+    let arguments = phone_call_arguments(m, method, args, count);
+    trace_phone_tap(Some(tap_id), format!("phone movie dispatch={method} {arguments}"));
 }
 
 /// The `SET_DATA_SLOT` being built for the home screen (its view and slot
@@ -800,6 +1081,43 @@ mod tests {
         assert!(off_home(m));
         assert_eq!(m.f64(state(2) + PARAMS), OFF_HOME);
         assert_eq!(m.f64(state(1) + PARAMS), 7.0, "the other one untouched");
+    }
+
+    #[test]
+    fn phone_script_trace_keeps_only_static_phone_app_identifiers() {
+        let mut buf = vec![0u8; 512];
+        let m = Mem::over(&mut buf);
+        m.write_str(8, "appContacts", 64);
+        m.write_str(80, "cellphone_ifruit", 64);
+        m.write_str(160, "am_mission", 64);
+        m.write_str(240, "app private text", 64);
+
+        assert_eq!(phone_app_script_name(m, 8).as_deref(), Some("appContacts"));
+        assert_eq!(phone_app_script_name(m, 80).as_deref(), Some("cellphone_ifruit"));
+        assert_eq!(phone_app_script_name(m, 160), None);
+        assert_eq!(phone_app_script_name(m, 240), None, "free text is never retained");
+    }
+
+    #[test]
+    fn phone_movie_trace_limits_strings_and_numeric_fields() {
+        let mut buf = vec![0u8; 512];
+        let m = Mem::over(&mut buf);
+        m.set_u32(8, GFX_STRING | 0x40);
+        m.set_u64(24, 64);
+        m.set_u64(64, 128);
+        m.write_str(128, "CELL_CONTACTS", 49);
+        assert_eq!(safe_phone_token(m, 8).as_deref(), Some("CELL_CONTACTS"));
+        m.write_str(128, "Private contact", 49);
+        assert_eq!(safe_phone_token(m, 8), None);
+
+        let args = 256;
+        for index in 0..4 {
+            let value = args + index * GFX_VALUE;
+            m.set_u32(value + 8, GFX_NUMBER);
+            m.set_u64(value + 16, ((index + 1) as f64).to_bits());
+        }
+        assert_eq!(phone_call_arguments(m, "SET_DATA_SLOT", args, 4), "args=[1,2,3]");
+        assert_eq!(phone_call_arguments(m, "UNKNOWN_METHOD", args, 4), "argc=4");
     }
 
     /// ActionScript that calls itself without end (the phone's LOAD_APP and

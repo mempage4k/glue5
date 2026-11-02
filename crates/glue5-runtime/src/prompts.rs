@@ -175,6 +175,7 @@ pub(crate) unsafe extern "C" fn scaleform_call_method(
             bar_method(mem, movie, method, args, count);
         }
     }
+    crate::script_assets::trace_phone_scaleform_call(env, movie, name, args, count);
     unsafe { orig::scaleform_call_method(env, ret, movie, child, base, name, args, count, instantly, store, ret_id, unique) }
 }
 

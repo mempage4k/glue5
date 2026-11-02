@@ -1199,6 +1199,7 @@ fn the_phone_screen_emits_pointer_clicks_and_keeps_swipe_navigation() {
     t.finger_up(1);
     let click = t.take_mouse();
     assert!(click.down, "a tap emits a mouse click at that point");
+    assert_eq!(click.phone_tap_id, Some(1), "the direct phone tap keeps its ID to the forwarded mouse-down");
     assert_eq!(t.gamepad().buttons & button::SOUTH, 0, "the touch layer does not synthesize gamepad Select");
     assert_eq!(t.gamepad().left, [0.0, 0.0]);
 
@@ -1211,7 +1212,9 @@ fn the_phone_screen_emits_pointer_clicks_and_keeps_swipe_navigation() {
     t.finger_motion(2, x3, y3);
     assert_eq!(t.gamepad().buttons & button::RIGHT, button::RIGHT, "then right");
     t.finger_up(2);
-    assert!(!t.take_mouse().down, "a swipe is not an accidental click");
+    let swipe_mouse = t.take_mouse();
+    assert!(!swipe_mouse.down, "a swipe is not an accidental click");
+    assert_eq!(swipe_mouse.phone_tap_id, None, "a swipe does not get a direct-tap ID");
     assert_eq!(t.gamepad().buttons & button::SOUTH, 0, "a swipe does not press gamepad Select");
     assert_eq!(t.look, Vec2::ZERO, "nor turns the camera");
 }
@@ -1246,7 +1249,7 @@ fn phone_touch_trace_separates_swipes_screen_taps_and_virtual_back() {
     let events = t.phone_touch_diagnostics();
     assert!(events.iter().any(|e| e.contains("phone_screen gesture=swipe_step direction=Up count=1")));
     assert!(events.iter().any(|e| e.contains("phone_screen gesture=swipe_end steps=1")));
-    assert!(events.iter().any(|e| e.contains("phone_screen gesture=tap outcome=mouse_click")));
+    assert!(events.iter().any(|e| e.contains("phone_screen tap_seq_id=1 gesture=tap outcome=mouse_click")));
     assert!(events.iter().any(|e| e.contains("phone_virtual_key key=Back phase=down")));
     assert!(events.iter().any(|e| e.contains("phone_virtual_key key=Back phase=up")));
     assert!(events.iter().any(|e| e.contains("phone_virtual_key key=Back phase=phone_closed")));
