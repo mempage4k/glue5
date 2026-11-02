@@ -35,8 +35,8 @@ Itens registrados a pedido do usuário em 2026-10-28. Este documento é planejam
 - O editor de layout ainda não existe. `Settings` guarda apenas perfil Classic/Modern, tamanho, opacidade e preferências de interação; não há posições customizadas nem importação/exportação XML.
 - `Touch::buttons()` monta controles a partir do contexto do jogador e dos prompts dinâmicos. `Touch::draw()`, `touch_finger()` e `occupied()` dependem dessa geometria; qualquer editor deve usar a mesma posição resolvida para renderizar, acertar hitboxes e evitar sobreposições.
 - As posições padrão são âncoras `At` relativas à safe area e à escala da tela. O app configura o objeto `Touch` durante o jogo; a página de controles atual não oferece uma prévia editável.
-- Implementação inicial em andamento: toques no aparelho agora enviam clique do mouse na coordenada tocada, sem aceitar também o app que estava previamente selecionado; swipes direcionais continuam como alternativa. Ainda precisa ser validado no GTA se a tela principal do Scaleform aceita esses cliques e se chamadas podem ser atendidas/encerradas assim.
-- Em touch ativo, o código aproxima a posição 3D do aparelho para projetá-lo em 1,25×, preservando o centro e restaurando a posição original quando o touch termina ou o aparelho é guardado. A geometria de toque usa a mesma posição ampliada. A mudança ainda não foi validada no dispositivo.
+- Implementado no roteamento de input, **não como seleção direta**: um tap no visor emite clique de mouse genérico na coordenada tocada; swipes seguem como passos direcionais. Isso não muda a seleção interna do filme por si só. O usuário confirmou que, com Michael pré-selecionado, tocar Trevor ainda abre as mensagens de Michael; não apresentar clique ou swipe como prova de hit-test direto. Atender/encerrar chamadas por alvo tocado também continua sem validação.
+- A ampliação experimental de 1,25× aproxima o aparelho e usa sua posição para a área de toque; a investigação posterior identificou corrida entre essa escrita por frame e a posição/sway que o jogo escreve. A mitigação atual é `phone_enlarge=false` por padrão. Ver o status de validação abaixo; não tratar a ampliação como comportamento seguro ou como correção de interação direta.
 - Correção inicial (2026-10-29): o botão de abrir o celular passou a emitir um único frame de `UP`, evitando repetir a ação enquanto o dedo continua pressionado; o teste cobre frames subsequentes sem soltar. O botão drive-by agora continua segurando L1+R1 enquanto um arrasto nele move a mira/câmera; testes cobrem Classic e Modern. Ainda não foi compilado nem validado no aparelho.
 - Segunda correção (2026-10-30, após novo relato no aparelho): o pulso único não bastava — enquanto o celular ainda está subindo, o botão continua visível e qualquer segundo registro do mesmo toque (evento duplicado, segundo dedo ou retoque) emitia outro `UP`, guardando o celular de novo e reiniciando o ciclo abre/fecha. Agora o pulso vale até o jogo mostrar o celular aberto (ou 1,5 s, se ele não abrir): registros repetidos nesse intervalo não emitem nada. Além disso, com o celular aberto mas a posição ainda desconhecida, toques onde ele fica não caem mais em botões do layout (o Back o guardaria). Testes: `the_phone_button_pulses_once_until_the_phone_is_seen_out` e `with_the_phone_out_unplaced_a_tap_on_its_place_presses_no_button`. Ainda não compilado nem validado no aparelho; se o ciclo persistir, coletar o relatório de diagnóstico do app (ele registra as transições do pad touch: pulsos repetidos de `Up` apareceriam nele).
 - Áreas de toque de debug (primeira versão, 2026-10-30): os elementos internos das telas Scaleform do GTA não são expostos ao GLUE 5 com IDs, então o usuário ensina retângulos sobre a tela. Em Settings › Diagnostics, o interruptor mostra/ativa as áreas; **Edit debug touch areas** fecha as páginas e entra no editor sobre o jogo (desenhar em espaço vazio, arrastar para mover, puxar cantos para redimensionar; editar não dispara ação). Cada área persiste em `glue5.json` com nome, retângulo normalizado, contexto de exibição (sempre, gameplay, celular aberto ou telas de ponteiro) e ação ao tocar: clique de mouse no centro da área ou um pulso de botão do pad (Back/Confirm/direcionais). Testes novos cobrem pulso/clique, contexto e edição. Ainda não compilado nem validado no aparelho.
@@ -47,6 +47,37 @@ Itens registrados a pedido do usuário em 2026-10-28. Este documento é planejam
 - Desfecho do ciclo e revisão do toque (2026-10-31, branch `arena/107599ac-glue5`): o usuário confirmou no aparelho que **desligar Bigger phone para o ciclo** — a ampliação (reescrever a posição do celular por frame, em outra thread, enquanto o jogo escreve a dele) era o gatilho. `phone_enlarge` agora nasce desligada e a chave avisa que é experimental; ampliar sem a briga pede intervir em `SET_MOBILE_PHONE_POSITION` na fronteira do nativo (futuro). No início, o tap que abria Contatos foi atribuído à ausência de delta relativo e o `App` passou a enviar delta junto da posição, o que segue útil para caminhos de mouse. A inspeção posterior dos scripts/GFX não encontrou hit-test por ponteiro na seleção da tela inicial; portanto **o delta não está confirmado como correção de seleção do app tocado**. O caminho atual encaminha posição/clique, enquanto o script ainda lê `GET_CURRENT_SELECTION` da seleção existente.
 - Investigação `deep_movie` (2026-10-31): nos scripts descompilados, navegação usa seleção (`SET_INPUT_EVENT(1..4)`; rolagem 180/181 no modo teclado/mouse) e confirmação usa `GET_CURRENT_SELECTION`; os quatro GFX examinados não mostram handlers de clique/coordenada. Isso é evidência contra um hit-test direto já implementado, não prova de que nenhuma camada externa possa despachar um evento. O Import report registra os métodos do filme do celular (`SET_INPUT_EVENT`, `DISPLAY_VIEW`, `GET_CURRENT_SELECTION`) para o próximo teste no aparelho ajudar a decidir a injeção mais direta no limite filme/script.
 - Próximo passo: implementar o editor arrastável na tela com IDs semânticos estáveis, posições persistidas e a mesma geometria compartilhada por desenho, hitboxes e áreas ocupadas; depois adicionar importação/exportação de presets XML versionados e validados. Manter fallback para o layout padrão e não alterar os passes gráficos.
+
+## Status do celular e gate de integração (2026-11-01)
+
+Acompanhar evidências e decisão do dono na issue Linear [GLU-27](https://linear.app/glue5/issue/GLU-27/touch-gate-do-celular-ciclo-mitigado-e-selecao-direta-pendente).
+
+### Implementado
+
+- O caminho de tap do telefone encaminha clique genérico de mouse; swipe continua gerando navegação direcional. **Não existe seleção direta demonstrada.**
+- O Import report inclui `Recent phone movie methods`, limitado e sem coordenadas cruas: registra `SET_INPUT_EVENT(n)`, `DISPLAY_VIEW(viewID,currentID)` e `GET_CURRENT_SELECTION`, com timestamps compartilhados. O trace não registra o inteiro retornado por `GET_CURRENT_SELECTION`.
+- `phone_enlarge` tem padrão `false` e é experimental. Isso evita a ampliação concorrente por padrão, mas não corrige o caminho de seleção.
+
+### Testado em CI
+
+- O PR #12 tem três checks verdes segundo o estado informado. Eles não são teste no aparelho nem fecham o gate de toque direto.
+
+### Validado no aparelho
+
+- O dono confirmou que `Bigger phone` desligado para o ciclo visual, a pé e em carro; ligado, o ciclo volta. Isso valida a mitigação de posição, não o toque direto. O teste foi feito com a opção explicitamente desligada; não há confirmação separada de um primeiro-start com valores padrão.
+- O caso de seleção continua falhando: Michael pré-selecionado + toque em Trevor abre as mensagens de Michael. Portanto o toque direto não está validado.
+
+### Gate pendente com o dono
+
+- Rodar no Galaxy S21+ com `Bigger phone` **off** e `Phone touchscreen input` **on**: abrir o telefone, dar um swipe, tocar num app diferente do pré-selecionado, usar o botão virtual **Back/Voltar** e copiar o **Import report**.
+- Comparar a seção de gestos com `Recent phone movie methods` ao redor do toque. O trace anterior só correlaciona tap com `GET_CURRENT_SELECTION`; como não mostra o slot retornado nem coordenadas, ainda não determina se a injeção deve ocorrer no retorno do getter ou antes/depois de `DISPLAY_VIEW`.
+- O dono informou que a build `ce99d1b` não expõe as opções; portanto esse A/B fica bloqueado até haver uma build que inclua as duas chaves e o trace. Pedir apenas as seções relevantes, sem screenshots, coordenadas cruas, nomes/caminhos de saves ou logs de outros processos. Não pedir Shizuku sem autorização explícita.
+- Critério de sucesso: o toque abre o item tocado, distinto do pré-selecionado, sem usar directional stepping nem mouse forwarding como prova; cobrir Badger, Facade, iFruit e Prologue.
+
+### Ainda não pronto / decisões do dono
+
+- O editor de layout e o fluxo de presets editáveis não estão prontos nem validados. Preservar posições persistidas e presets; desenho, hit-test e áreas ocupadas devem continuar compartilhando uma fonte de geometria.
+- O PR #12 segue aberto. Dividir mitigação e instrumentação, aceitar merge parcial ou adicionar índice interno a `docs/gta-patches.md` são decisões do dono, não deste chat. `docs/README.md` já aponta para `gta-patches.md`; ainda assim, perguntar se o dono quer um índice interno.
 
 ## Validação
 
