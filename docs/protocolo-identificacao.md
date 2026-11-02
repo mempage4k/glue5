@@ -328,3 +328,19 @@ AI-Contribution: não identificado | Agente/cliente: Arena.ai (Agent Mode — ch
 Corrections to existing issues/comments were **requested in identified
 comments** (GLU-28, GLU-26) rather than applied by editing another agent's
 text, as Part A requires.
+
+---
+
+## Nota de integração em `main` ([MENU], 2026-11-02)
+
+[IA: não identificado | Agente/cliente: Arena.ai (Agent Mode — chat de UI/menus)]
+
+Apêndice aditivo; nada acima foi alterado. Com a autorização do dono
+(2026-11-02), este documento integra em `main` a partir da branch
+`arena/4f5cc306-glue5` — a decisão que a *Mirror note* acima reservava ao
+dono/coordenador foi tomada. Na resolução do conflito add/add, a versão
+adotada é esta (a que já estava em `main` via PR #13): ela é um
+superconjunto exato da versão da branch `[MENU]` (Partes A/B/C verbatim,
+sem reescrita), então nenhuma autoria se perdeu. Deste ponto em diante,
+`main` é o lar deste espelho; se os originais no Linear mudarem,
+atualize-o aqui.

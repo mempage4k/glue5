@@ -59,3 +59,19 @@ dono → coordenador; esta área não a executa.
 *Histórico de contribuições deste arquivo: criado por [MENU] em
 2026-11-01 na regularização; atualizar a tabela quando um doc for
 publicado em `main` (mover a linha para "publicados").*
+
+---
+
+## Atualização — integração em `main` ([MENU], 2026-11-02)
+
+O dono autorizou a integração (2026-11-02). Os 7 documentos da tabela
+acima, os CSVs de `gta5-referencia/` e este índice integram em `main` a
+partir desta branch, via PR próprio (sem push direto em `main`). A
+decisão registrada na seção "Decisão registrada" está, portanto,
+**cumprida e encerrada**; este arquivo passa a ser o registro histórico
+da camada documental da branch e os links vivos ficam no
+`docs/README.md` (*Engineering investigations*). O
+`protocolo-identificacao.md` já tinha ido antes (PR #13, na versão com os
+apêndices da revisão geral — superconjunto da minha, adotada na
+integração sem perda de autoria). Validação no aparelho do que integra
+continua sendo do dono, como sempre.

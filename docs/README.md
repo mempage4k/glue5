@@ -22,6 +22,14 @@
 
 - [Android performance: Galaxy S21 Plus](android-performance-s21.md): device-specific hypotheses, verification gates and measurements; static review only until validated on hardware.
 - [Touch, HUD and benchmark roadmap](roadmap-touch-hud-benchmarks.md): scoped implementation backlog and progress for touch/HUD and GLUE 5 benchmarks.
+- [GTA V reference inventory](gta5-reference-inventory.md): measured reference material from the game's own files (fonts, palette, Scaleform geometry); metadata CSVs live in [`gta5-referencia/`](gta5-referencia/). `[MENU]` area.
+- [GTA V visual parity audit](gta5-visual-parity.md): measured deltas between the egui shell and the game's visual language; backlog source for GLU-10 and GLU-13…GLU-19. `[MENU]` area.
+- [Shell notifications design](shell-notifications.md): the five notification channels (pop-up, toast, help hint, settings note, signs) and when to grow them. `[MENU]` area.
+- [Frontend menu sounds](menu-sfx.md): verified frontend sound names mined from the game's scripts and their mapping to the shell's sound events. `[MENU]` area.
+- [Runtime font extraction design](font-extraction.md): extracting the game's fonts from the player's own installation into the shell's font cache (GLU-24; design, implementation pending). `[MENU]` area.
+- [RPF/AWC reader research](rpf-awc-reader.md): reading game archives at runtime (GLU-21; research — implementation belongs to another area). `[MENU]` area.
+- [Round-2 ChatGPT prompt (historical)](prompt-chatgpt-2026-11-01-ysc-full.md): the fulfilled 2026-11-01 request that produced the YSC decompilation lot; kept as record. `[MENU]` area.
+- [[MENU] branch documentation index (historical)](documentacao-branch-menu.md): the index of the docs that lived only on the `[MENU]` branch until the 2026-11-02 integration; kept as the record of that decision.
 - [Project diary](project-diary.md): temporary chronological notes; not the source of truth for durable design decisions or backlogs.
 
 **Conventions and governance**
@@ -69,3 +77,12 @@ append-on-append conflicts at integration time; see
 [Integration status](integration-status.md). The area code chosen by the
 server/streaming chat is `[SERV]`, not the `[STREAM]` proposed in the
 delegation messages.
+
+**Update (2026-11-02, `[MENU]` integration):** the `[MENU]` rows in the
+table above are stale — with the owner's authorization, the seven `[MENU]`
+documents, the `gta5-referencia/` CSVs and
+`documentacao-branch-menu.md` now integrate into `main` from
+`arena/4f5cc306-glue5` and are linked under *Engineering investigations*
+above. The table is kept as the pre-integration record; the `[TOUCH]`,
+`[SERV]` and `[PERF]` rows were not edited by `[MENU]` and remain for
+their own areas (and general review) to update.
