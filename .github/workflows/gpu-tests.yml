@@ -44,7 +44,8 @@ jobs:
           .github/scripts/draft.sh fetch "$game"
           echo "GLUE5_GAME_DIR=$game" >>"$GITHUB_ENV"
 
-      - uses: jdx/mise-action@v2
+      # Pin the same reviewed mise-action revision used by the multi-platform Build workflow.
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca
         with:
           version: 2026.7.5
           install: true
