@@ -100,15 +100,17 @@ pub struct Settings {
     pub touch_tilt_full_lock: f32,
     /// Touch-control taps and the game's rumble on devices with haptic feedback.
     pub haptics: bool,
-    /// The phone, while out, takes taps on its own screen (the game's input
-    /// device switches to keyboard/mouse for it). Off, the pad drives the
-    /// phone instead (D-pad and buttons): an experimental switch, for
-    /// telling a phone that cycles open/closed apart.
+    /// While the phone is out, mark the active input device as
+    /// keyboard/mouse rather than pad (D-pad and buttons). This does not
+    /// itself select an app slot; direct hit-testing is still under
+    /// investigation.
     pub phone_touchscreen: bool,
     /// The phone, while out on touch controls, is brought nearer so it
-    /// shows bigger. Off, it keeps the game's own size and place: an
-    /// experimental switch, for telling a phone that will not stay put
-    /// apart.
+    /// shows bigger. Off by default: as done today — the phone's place in
+    /// the game's memory rewritten every frame — it races the game's own
+    /// writes of that place, and the drawn phone jumps between the two
+    /// (seen on a Galaxy S21+ as the phone opening and closing on its
+    /// own). Experimental until it is done another way.
     pub phone_enlarge: bool,
     /// The game starts in the sandbox (the map, no story) rather than the
     /// story: the start page's last choice.
@@ -433,7 +435,7 @@ impl Default for Settings {
             touch_tilt_full_lock: 22.0,
             haptics: true,
             phone_touchscreen: true,
-            phone_enlarge: true,
+            phone_enlarge: false,
             sandbox: false,
             online: false,
             reduce_motion: false,
@@ -646,6 +648,9 @@ mod tests {
         assert_eq!(settings.touch_gyro_aim, GyroAim::Off);
         assert_eq!(settings.touch_tilt_steer, TiltSteer::Off);
         assert!(!settings.reduce_motion, "older settings default to animated backgrounds");
+        assert!(!settings.phone_enlarge, "phone enlargement defaults to the safe, game-owned position");
+        let opted_in: Settings = serde_json::from_str(r#"{"phone_enlarge":true}"#).unwrap();
+        assert!(opted_in.phone_enlarge, "the player can still explicitly enable enlargement");
     }
 
     #[test]

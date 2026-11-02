@@ -67,4 +67,9 @@
     // screen gets no app its movie lacks.
     ("method_begin", "CScaleformMgr::BeginMethodInternal(int, eSCALEFORM_BASE_CLASS, char const*, int, int)"),
     ("param_int", "CScaleformMgr::AddParamInt(int)"),
+    // The phone's asynchronous GET_CURRENT_SELECTION result: its handle,
+    // readiness and integer value, observed without changing them.
+    ("scaleform_method_return_end", "graphics_commands::SetupScriptCommands()::scrWrapped_END_SCALEFORM_MOVIE_METHOD_RETURN_VALUE::Call(rage::scrThread::Info&)"),
+    ("scaleform_method_return_ready", "graphics_commands::SetupScriptCommands()::scrWrapped_IS_SCALEFORM_MOVIE_METHOD_RETURN_VALUE_READY::Call(rage::scrThread::Info&)"),
+    ("scaleform_method_return_int", "graphics_commands::SetupScriptCommands()::scrWrapped_GET_SCALEFORM_MOVIE_METHOD_RETURN_VALUE_INT::Call(rage::scrThread::Info&)"),
 ]
