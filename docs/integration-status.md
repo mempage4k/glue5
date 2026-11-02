@@ -9,6 +9,34 @@ publicação e não substitui o project update do Linear.
 
 Base: `main` / `origin/main` = `af1158b`. Repositório: `luizhegner/glue5`.
 
+---
+
+## Atualização (2026-11-02) — ler antes das seções abaixo
+
+`[IA: não identificado | Agente/cliente: Arena.ai (Agent Mode — chat de revisão geral)]`
+
+As seções 1–7 são um **retrato histórico de 2026-11-01**; vários fatos mudaram.
+Estado verificado por `git ls-remote` e pela API do GitHub em 2026-11-02:
+
+* `main` = `24bce99`, commit da GLU-31: `default: android`,
+  `docs/linear-workflow.md`, `AI_GUIDE.md` e workflows padronizados. **O default
+  Android já está em `main`** — deixou de ser exclusividade deste branch.
+* A GLU-31 registrou que outra IA auditou e atualizou **18/18 branches
+  remotos** (`main`, 14 `arena/*`, 3 `ci/*`), cada uma com seu próprio commit.
+  Por isso várias branches passaram a existir no remote e há commits com o
+  **mesmo assunto e SHAs diferentes** entre branches.
+* Este branch foi **publicado** (`749ed20`). O dono autorizou a integração em
+  `main` em 2026-11-02; a seção 5 abaixo descreve o gate **anterior**, já
+  substituído por essa autorização.
+* Builds Android manuais em `arena/107599ac-glue5` constam como
+  `completed/success` no Actions. **Isso não é validação no aparelho**: o toque
+  direto no celular do jogo segue sem confirmação do dono (GLU-27).
+* Os conflitos de `docs/README.md` e `docs/project-diary.md` **permanecem**, e
+  a GLU-31 editou `docs/README.md` em todas as branches.
+* Nomes de APK e identidade de build: [`build-identity.md`](build-identity.md).
+
+---
+
 ## 1. Branches
 
 | Área | Branch | Ponta | Publicação | Estado do trabalho |
