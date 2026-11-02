@@ -984,6 +984,7 @@ impl App {
                 });
         if show != self.touch_shown {
             self.touch_shown = show;
+            glue5_runtime::clear_phone_touch_context("touch_controls_changed");
             self.touch.clear();
             #[cfg(target_os = "android")]
             if !show
@@ -1055,12 +1056,44 @@ impl App {
             if let Some(motion) = self.motion.as_mut() {
                 motion.apply(&self.touch, &self.settings, &self.window, &mut touch_pad);
             }
+            let look = self.touch.take_look();
+            let mouse = self.touch.take_mouse();
+            if mouse.phone_context_reset {
+                glue5_runtime::clear_phone_touch_context("new_phone_interaction_or_close");
+            }
+            // The phone's list movies return a selected row, not a mouse
+            // hit-test. For supported lists, use the tapped screen point to
+            // override that asynchronous selection result and confirm once;
+            // otherwise preserve the original mouse-click path.
+            let direct_phone_selection = if self.settings.phone_touchscreen
+                && self.game.as_ref().and_then(|game| game.input.as_ref()).is_some()
+                && let (Some(tap_id), Some(at)) = (mouse.phone_tap_id, mouse.phone_tap_at)
+            {
+                let target = glue5_runtime::phone_touch_selection_target(
+                    at.x,
+                    at.y,
+                    screen.x / screen.y.max(1.0),
+                );
+                if target.is_some() {
+                    self.touch.suppress_phone_tap_mouse(tap_id);
+                }
+                target
+            } else {
+                None
+            };
+            if let Some((view, selection)) = direct_phone_selection {
+                touch_pad.buttons |= glue5_runtime::input::button::SOUTH;
+                if let Some(tap_id) = mouse.phone_tap_id {
+                    // Establish the target before the game can consume the
+                    // one-frame confirm that follows.
+                    glue5_runtime::note_phone_touch_tap(tap_id, false, Some((view, selection)));
+                }
+            }
             glue5_runtime::input::set_gamepad(0, touch_pad);
             for input in self.touch.take_inputs() {
                 glue5_runtime::prompts::hold_input(input);
             }
-            let look = self.touch.take_look();
-            let mouse = self.touch.take_mouse();
+            let mut phone_tap_forwarded = false;
             if let Some(game) = &self.game
                 && let Some(input) = &game.input
             {
@@ -1073,10 +1106,22 @@ impl App {
                     && let Some(at) = mouse.at
                 {
                     let (w, h) = game.back_buffer;
-                    input.mouse_position((at.x * w as f32) as i32, (at.y * h as f32) as i32);
+                    let (x, y) = ((at.x * w as f32) as i32, (at.y * h as f32) as i32);
+                    input.mouse_position(x, y);
+                    // A real mouse reports its travel as well as where it
+                    // stands, so a new touch pointer position reports both
+                    // (the pause menu's cursor moves by the travel).
+                    if let Some(was) = self.touch_mouse.at {
+                        let (dx, dy) = (x - (was.x * w as f32) as i32, y - (was.y * h as f32) as i32);
+                        if (dx, dy) != (0, 0) {
+                            input.mouse_motion(dx, dy);
+                        }
+                    }
                 }
-                if mouse.down != self.touch_mouse.down {
-                    input.mouse_button(mouse::LEFT, mouse.down);
+                let mouse_down = mouse.down && direct_phone_selection.is_none();
+                if mouse_down != self.touch_mouse.down {
+                    input.mouse_button(mouse::LEFT, mouse_down);
+                    phone_tap_forwarded = mouse_down && mouse.phone_tap_id.is_some();
                 }
                 if mouse.wheel != 0 {
                     input.mouse_wheel(mouse.wheel);
@@ -1086,7 +1131,16 @@ impl App {
                         input.key(vk, held);
                     }
                 }
-                self.touch_mouse = mouse;
+                let mut touch_mouse = mouse;
+                touch_mouse.down = mouse_down;
+                self.touch_mouse = touch_mouse;
+            }
+            if let Some(tap_id) = mouse.phone_tap_id
+                && direct_phone_selection.is_none()
+            {
+                // This event follows input.mouse_button, so it distinguishes a
+                // queued click from the mouse-down actually sent this frame.
+                glue5_runtime::note_phone_touch_tap(tap_id, phone_tap_forwarded, None);
             }
         }
         // The game's rumble while the touch controls play; stopped as soon as
@@ -1195,12 +1249,14 @@ impl App {
                     #[cfg(target_os = "android")]
                     {
                         let touch_events = self.touch.diagnostics();
+                        let phone_touch_events = self.touch.phone_touch_diagnostics();
                         if let Err(error) = crate::imports::copy_diagnostics(
                             &self.user_dir,
                             self.source,
                             self.game_dir.as_deref(),
                             &self.settings,
                             &touch_events,
+                            &phone_touch_events,
                         ) {
                             self.ui.note(format!("Could not copy import diagnostics: {error:#}"));
                         }
@@ -1663,12 +1719,14 @@ impl App {
         #[cfg(target_os = "android")]
         {
             let touch_events = self.touch.diagnostics();
+            let phone_touch_events = self.touch.phone_touch_diagnostics();
             if let Err(error) = crate::imports::copy_diagnostics(
                 &self.user_dir,
                 self.source,
                 self.game_dir.as_deref(),
                 &self.settings,
                 &touch_events,
+                &phone_touch_events,
             ) {
                 log::error!("cannot save/copy support report after game failure: {error:#}");
             }

@@ -22,6 +22,7 @@
 
 - [Android performance: Galaxy S21 Plus](android-performance-s21.md): device-specific hypotheses, verification gates and measurements; static review only until validated on hardware.
 - [Touch, HUD and benchmark roadmap](roadmap-touch-hud-benchmarks.md): scoped implementation backlog and progress for touch/HUD and GLUE 5 benchmarks.
+- [GTA V runtime patches](gta-patches.md): durable rules, evidence, patch boundaries, and open questions for future GTA patch work.
 - [Windows streaming server and audio mirror audit](windows-stream-audio-audit.md): a supplied Windows audit snapshot, repository streaming behavior, and open questions for optional character-voice downloads.
 - [Streaming flow map](streaming-flow.md): source map from server announcement and discovery to client cache and engine reads; includes the current Android-only support note.
 - [Project diary](project-diary.md): temporary chronological notes; not the source of truth for durable design decisions or backlogs.
@@ -35,7 +36,11 @@
 - [Contributing](../CONTRIBUTING.md): tracker, branches, tests and commit rules.
 - [AI_GUIDE.md](../AI_GUIDE.md): guardrails for agents, including the Android build gate.
 
-**Documentation living on specialist branches (not in `main`)**
+**Documentation living on specialist branches (not in `main`; snapshot before PR #12)**
+
+This table records the pre-integration state. `gta-patches.md` is the `[TOUCH]`
+document contributed by PR #12 and linked above; its branch-only status below
+is historical once that PR lands.
 
 Seven reference documents are cited by the Linear project as if they were
 part of the repository, but they do not exist in `main`. The `[MENU]` area
@@ -66,10 +71,16 @@ of truth for `main` until they land there.
 `menu-sfx.md` and `project-diary.md` do exist in `main`, but the `[MENU]`
 branch carries different versions; see its index before merging either.
 
-**Coordination warning:** `docs/README.md` itself now has three authors
+**Coordination warning (pre-PR #12 snapshot):** `docs/README.md` itself now has three authors
 (`main`, `[SERV]` and general review), plus the version carried by PR #12.
-`docs/project-diary.md` has `[MENU]`, `[PERF]` and `[SERV]` bullets. Both are
+`docs/project-diary.md` has `[MENU]`, `[PERF]` and `[SERV]` bullets. Both were
 append-on-append conflicts at integration time; see
 [Integration status](integration-status.md). The area code chosen by the
 server/streaming chat is `[SERV]`, not the `[STREAM]` proposed in the
 delegation messages.
+
+**[TOUCH] resolution in PR #12:** The README keeps the `main` index, the
+`[TOUCH]` runtime-patch and roadmap entries, and the `[SERV]` links already
+merged via PR #15. The diary is merged additively: its existing `main` text,
+the `[SERV]` entry already landed via PR #15, and the `[TOUCH]` additions are
+retained. No unpublished content from another specialist branch was imported.

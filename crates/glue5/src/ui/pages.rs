@@ -421,6 +421,18 @@ fn settings_items(
                 &mut settings.touch,
                 &[(TouchMode::Auto, "Auto"), (TouchMode::Always, "On"), (TouchMode::Off, "Off")],
             );
+            switch_row(
+                ui,
+                "Phone touchscreen input",
+                "On: use mouse-mode input while the phone is out. Off: keep pad mode (D-pad and buttons). A tap may still accept the current item until direct hit-testing is implemented",
+                &mut settings.phone_touchscreen,
+            );
+            switch_row(
+                ui,
+                "Bigger phone",
+                "Experimental: enlarge the phone while touch controls are active. Off keeps the game's own size and position; enlargement can make the phone flicker on some builds",
+                &mut settings.phone_enlarge,
+            );
             if crate::device::is_galaxy_s21_plus() {
                 pick_row(
                     ui,
@@ -713,18 +725,6 @@ fn settings_items(
                 "Debug touch areas",
                 "Show the areas I taught the app over the game, and do what they say",
                 &mut settings.debug_touch_areas_visible,
-            );
-            switch_row(
-                ui,
-                "Phone touchscreen input",
-                "Experimental: while the phone is out, taps land on its screen. Off, the pad drives the phone (D-pad and buttons) instead",
-                &mut settings.phone_touchscreen,
-            );
-            switch_row(
-                ui,
-                "Bigger phone",
-                "Experimental: while the phone is out on touch controls, it is brought nearer so it shows bigger. Off, it keeps the game's own size",
-                &mut settings.phone_enlarge,
             );
             if action_row(ui, "Edit debug touch areas", "Close this page: draw a new area, drag one, or pull its corners", "EDIT") {
                 actions.push(Action::EditDebugTouchAreas);

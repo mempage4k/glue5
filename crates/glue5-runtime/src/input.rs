@@ -8,7 +8,7 @@
 
 use std::cell::Cell;
 use std::collections::VecDeque;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
@@ -319,11 +319,9 @@ impl PhoneOut {
 
 static PHONE_STATE: Mutex<PhoneOut> = Mutex::new(PhoneOut::new());
 
-/// While the phone is out, whether it is driven as a touchscreen (the input
-/// device switches to keyboard/mouse so taps on the phone's screen land) or
-/// left on the pad (D-pad and buttons). A settings switch: if the phone
-/// cycles open/closed on a build, this tells the device switch apart from
-/// the game cycling on its own.
+/// While the phone is out, whether the active device is marked as
+/// keyboard/mouse or left on the pad (D-pad and buttons). The phone movie's
+/// selected app is not changed here; a tap-to-slot bridge is still needed.
 static PHONE_TOUCHSCREEN: AtomicBool = AtomicBool::new(true);
 
 /// The phone's raw bytes, the state published from them and the device
@@ -332,7 +330,6 @@ static PHONE_TOUCHSCREEN: AtomicBool = AtomicBool::new(true);
 /// Bounded; no coordinates or contents.
 static PHONE_TRACE: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static PHONE_TRACE_LAST: Mutex<Option<(bool, bool, bool, bool, bool, bool, i32)>> = Mutex::new(None);
-static PHONE_TRACE_START: OnceLock<Instant> = OnceLock::new();
 
 fn trace_phone(created: bool, camera: bool, going: bool, raw: bool, published: bool, mouse: bool, z: f32) {
     // The phone's depth in half-steps: steady while it shows, so a phone
@@ -345,14 +342,13 @@ fn trace_phone(created: bool, camera: bool, going: bool, raw: bool, published: b
     }
     *last = Some(state);
     drop(last);
-    let start = PHONE_TRACE_START.get_or_init(Instant::now);
     let mut trace = PHONE_TRACE.lock().unwrap();
     if trace.len() == 64 {
         trace.pop_front();
     }
     trace.push_back(format!(
         "+{}ms phone created={created} camera={camera} going={going} raw_out={raw} out={published} device={} pos_z={z:.1}",
-        start.elapsed().as_millis(),
+        crate::diagnostics_elapsed_ms(),
         if mouse { "keyboard/mouse" } else { "pad" },
     ));
 }
@@ -498,16 +494,17 @@ pub fn set_touch_play(on: bool) {
     TOUCH_PLAY.store(on, Ordering::Relaxed);
 }
 
-/// The phone, while out, is driven by taps on its own screen (the input
-/// device switches to keyboard/mouse for it) rather than by the pad.
+/// Mark the active device as keyboard/mouse rather than pad while the phone
+/// is out. This alone does not select the app under the finger.
 pub fn set_phone_touchscreen(on: bool) {
     PHONE_TOUCHSCREEN.store(on, Ordering::Relaxed);
 }
 
 /// The phone, while out on touchscreens, is brought nearer so it shows
 /// bigger (its place in the game's memory is rewritten each frame). A
-/// settings switch: off, the game's own place stands.
-static PHONE_ENLARGE: AtomicBool = AtomicBool::new(true);
+/// settings switch: off, the game's own place stands. Keep the runtime
+/// fallback off until the app explicitly applies the saved setting.
+static PHONE_ENLARGE: AtomicBool = AtomicBool::new(false);
 
 pub fn set_phone_enlarge(on: bool) {
     PHONE_ENLARGE.store(on, Ordering::Relaxed);
@@ -762,10 +759,10 @@ pub(crate) unsafe extern "C" fn control_update(env: *mut Env, this: u64) {
         // minigame that loaded its own keyboard and mouse scheme (its
         // controls change with it): the pad, as made for touch.
         let fresh = |t: Option<Instant>| t.is_some_and(|t| t.elapsed() < FRESH);
-        // The phone's app screen now receives direct touch taps through the
-        // mouse input block, so keep its mouse-driven Scaleform controls
-        // active while the phone is out during touch play too — unless the
-        // phone is being driven by the pad instead (a settings switch).
+        // Forward phone-area taps through mouse input while this option is
+        // on. The same-install scripts read the movie's current selection;
+        // this device switch alone does not prove that pointer coordinates
+        // select the icon under the finger.
         let phone_screen = phone_out && PHONE_TOUCHSCREEN.load(Ordering::Relaxed);
         let mouse = !minigame && (frontend || bar || scripted || pointer || fresh(*CURSOR_AT.lock().unwrap()) || phone_screen);
         mem.set_i32(LAST_DEVICE, if mouse { KEYBOARD_MOUSE } else { 0 });
