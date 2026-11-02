@@ -7,7 +7,8 @@
 //!   after the original update, exactly where XInput would on PC.
 
 use std::cell::Cell;
-use std::sync::Mutex;
+use std::collections::VecDeque;
+use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
@@ -280,6 +281,86 @@ static SIGNALS: Mutex<Signals> = Mutex::new(Signals {
 static VEHICLE_NEAR: AtomicBool = AtomicBool::new(false);
 static SCAN_FRAME: AtomicU32 = AtomicU32::new(0);
 static PHONE_OUT: AtomicBool = AtomicBool::new(false);
+
+/// `PHONE_OUT` with hysteresis. The raw bytes dip while the phone remakes
+/// itself (its opening animation runs with `PHONE_GOING` set, and switching
+/// the input device between pad and keyboard/mouse — which this module does
+/// *because* the phone is out — can make the game rebuild the phone). Feeding
+/// those dips straight through made the published state, the device and the
+/// touch layout flip back and forth, and the phone cycled open/closed on its
+/// own after a single tap until the player backed out of it. Coming out is
+/// believed quickly; going away must hold, so a dip during the phone's own
+/// remake never flips anything back.
+#[derive(Clone, Copy)]
+struct PhoneOut {
+    published: bool,
+    flip_since: Option<Instant>,
+}
+
+impl PhoneOut {
+    const fn new() -> Self {
+        Self { published: false, flip_since: None }
+    }
+
+    fn update(&mut self, raw: bool, now: Instant) -> bool {
+        if raw == self.published {
+            self.flip_since = None;
+            return self.published;
+        }
+        let started = *self.flip_since.get_or_insert(now);
+        let wait = if raw { Duration::from_millis(60) } else { Duration::from_millis(600) };
+        if now.saturating_duration_since(started) >= wait {
+            self.published = raw;
+            self.flip_since = None;
+        }
+        self.published
+    }
+}
+
+static PHONE_STATE: Mutex<PhoneOut> = Mutex::new(PhoneOut::new());
+
+/// While the phone is out, whether it is driven as a touchscreen (the input
+/// device switches to keyboard/mouse so taps on the phone's screen land) or
+/// left on the pad (D-pad and buttons). A settings switch: if the phone
+/// cycles open/closed on a build, this tells the device switch apart from
+/// the game cycling on its own.
+static PHONE_TOUCHSCREEN: AtomicBool = AtomicBool::new(true);
+
+/// The phone's raw bytes, the state published from them and the device
+/// written, whenever any of them changes: for the support report, so the
+/// phone opening/closing on its own can be told from input this app sent.
+/// Bounded; no coordinates or contents.
+static PHONE_TRACE: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+static PHONE_TRACE_LAST: Mutex<Option<(bool, bool, bool, bool, bool, bool, i32)>> = Mutex::new(None);
+static PHONE_TRACE_START: OnceLock<Instant> = OnceLock::new();
+
+fn trace_phone(created: bool, camera: bool, going: bool, raw: bool, published: bool, mouse: bool, z: f32) {
+    // The phone's depth in half-steps: steady while it shows, so a phone
+    // jumping nearer and farther (its enlarged place against its own)
+    // stands out as lines of their own.
+    let state = (created, camera, going, raw, published, mouse, (z * 2.0) as i32);
+    let mut last = PHONE_TRACE_LAST.lock().unwrap();
+    if *last == Some(state) {
+        return;
+    }
+    *last = Some(state);
+    drop(last);
+    let start = PHONE_TRACE_START.get_or_init(Instant::now);
+    let mut trace = PHONE_TRACE.lock().unwrap();
+    if trace.len() == 64 {
+        trace.pop_front();
+    }
+    trace.push_back(format!(
+        "+{}ms phone created={created} camera={camera} going={going} raw_out={raw} out={published} device={} pos_z={z:.1}",
+        start.elapsed().as_millis(),
+        if mouse { "keyboard/mouse" } else { "pad" },
+    ));
+}
+
+/// The recent phone/device transitions, oldest first.
+pub fn diagnostics() -> Vec<String> {
+    PHONE_TRACE.lock().unwrap().iter().cloned().collect()
+}
 static PAUSE_MENU: AtomicBool = AtomicBool::new(false);
 /// The pause menu's frontend is up, with a script's menu in it or not.
 static FRONTEND: AtomicBool = AtomicBool::new(false);
@@ -415,6 +496,21 @@ struct Signals {
 /// ([`PlayerContext::cursor`]): fingers act as it there.
 pub fn set_touch_play(on: bool) {
     TOUCH_PLAY.store(on, Ordering::Relaxed);
+}
+
+/// The phone, while out, is driven by taps on its own screen (the input
+/// device switches to keyboard/mouse for it) rather than by the pad.
+pub fn set_phone_touchscreen(on: bool) {
+    PHONE_TOUCHSCREEN.store(on, Ordering::Relaxed);
+}
+
+/// The phone, while out on touchscreens, is brought nearer so it shows
+/// bigger (its place in the game's memory is rewritten each frame). A
+/// settings switch: off, the game's own place stands.
+static PHONE_ENLARGE: AtomicBool = AtomicBool::new(true);
+
+pub fn set_phone_enlarge(on: bool) {
+    PHONE_ENLARGE.store(on, Ordering::Relaxed);
 }
 
 /// The pause menu's Targeting Mode (`PREF_TARGET_CONFIG`, in its array of
@@ -651,7 +747,11 @@ pub(crate) unsafe extern "C" fn control_update(env: *mut Env, this: u64) {
     let pointer = crate::prompts::pointer_shown(env);
     POINTER.store(pointer, Ordering::Relaxed);
     let byte = |at: u64| mem.u8(at) & 1 != 0;
-    let phone_out = (byte(PHONE_CREATED) || byte(PHONE_CAMERA)) && !byte(PHONE_GOING);
+    let phone_created = byte(PHONE_CREATED);
+    let phone_camera = byte(PHONE_CAMERA);
+    let phone_going = byte(PHONE_GOING);
+    let raw_phone_out = (phone_created || phone_camera) && !phone_going;
+    let phone_out = PHONE_STATE.lock().unwrap().update(raw_phone_out, Instant::now());
     PHONE_OUT.store(phone_out, Ordering::Relaxed);
     let touch_play = TOUCH_PLAY.load(Ordering::Relaxed) && !menu;
     if touch_play {
@@ -664,15 +764,20 @@ pub(crate) unsafe extern "C" fn control_update(env: *mut Env, this: u64) {
         let fresh = |t: Option<Instant>| t.is_some_and(|t| t.elapsed() < FRESH);
         // The phone's app screen now receives direct touch taps through the
         // mouse input block, so keep its mouse-driven Scaleform controls
-        // active while the phone is out during touch play too.
-        let mouse = !minigame && (frontend || bar || scripted || pointer || fresh(*CURSOR_AT.lock().unwrap()) || phone_out);
+        // active while the phone is out during touch play too — unless the
+        // phone is being driven by the pad instead (a settings switch).
+        let phone_screen = phone_out && PHONE_TOUCHSCREEN.load(Ordering::Relaxed);
+        let mouse = !minigame && (frontend || bar || scripted || pointer || fresh(*CURSOR_AT.lock().unwrap()) || phone_screen);
         mem.set_i32(LAST_DEVICE, if mouse { KEYBOARD_MOUSE } else { 0 });
+        trace_phone(phone_created, phone_camera, phone_going, raw_phone_out, phone_out, mouse, PHONE_AT.lock().unwrap()[2]);
     }
     update_targeting(mem, touch_play);
     update_aim_locked(env, mem);
-    // The phone is enlarged only while touch controls are active. The same
-    // transformed position drives the touch rectangle, keeping it aligned.
-    *PHONE_AT.lock().unwrap() = update_phone_position(mem, touch_play, phone_out);
+    // The phone is enlarged only while touch controls are active (and the
+    // enlargement is on). The same transformed position drives the touch
+    // rectangle, keeping it aligned.
+    let enlarge = touch_play && PHONE_ENLARGE.load(Ordering::Relaxed);
+    *PHONE_AT.lock().unwrap() = update_phone_position(mem, enlarge, phone_out);
     SCRIPTED.store(scripted, Ordering::Relaxed);
     let model = if ped != 0 { mem.u64(ped + PED_ARCHETYPE) } else { 0 };
     let character = match if model != 0 { mem.u32(model + ARCHETYPE_HASH) } else { 0 } {
@@ -943,5 +1048,22 @@ mod phone_tests {
         assert!((before[0] - after[0]).abs() < 1.0e-6);
         assert!((before[1] - after[1]).abs() < 1.0e-6);
         assert!(((-original[2] / -enlarged[2]) - TOUCH_PHONE_SCALE).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn phone_out_dips_while_the_phone_remakes_itself_do_not_flip_it_back() {
+        let t0 = Instant::now();
+        let mut phone = PhoneOut::new();
+        assert!(!phone.update(false, t0));
+        // Out after a short stable read, not on the first frame.
+        assert!(!phone.update(true, t0));
+        assert!(phone.update(true, t0 + Duration::from_millis(70)));
+        // A dip shorter than the going-away wait (the phone remaking itself,
+        // the device switching because it is out) changes nothing.
+        assert!(phone.update(false, t0 + Duration::from_millis(100)));
+        assert!(phone.update(true, t0 + Duration::from_millis(300)));
+        // Held away, it is believed and stays believed.
+        assert!(phone.update(false, t0 + Duration::from_millis(400)));
+        assert!(!phone.update(false, t0 + Duration::from_millis(1_100)));
     }
 }

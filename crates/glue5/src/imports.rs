@@ -258,6 +258,7 @@ pub fn diagnostics_report(
     let _ = writeln!(report, "Save root: {}", saves.display());
     append_settings(&mut report, settings);
     append_touch_diagnostics(&mut report, touch_events);
+    append_input_diagnostics(&mut report, &glue5_runtime::input::diagnostics());
     append_perf_diagnostics(&mut report, &glue5_gpu::perf::diagnostics_snapshot());
     let gpu_diagnostics = glue5_gpu::census::diagnostics_snapshot();
     append_gpu_census(&mut report, gpu_diagnostics.as_ref());
@@ -346,7 +347,7 @@ fn append_settings(report: &mut String, settings: Option<&crate::settings::Setti
     );
     let _ = writeln!(
         report,
-        "Overlay: {:?}/{:?}; touch: {:?}, layout={:?}, vehicle_steer={:?}, aim_fire={:?}, aim_assist={:?}, camera_speed={:.2}, size={:.2}, opacity={:.0}%, haptics={}",
+        "Overlay: {:?}/{:?}; touch: {:?}, layout={:?}, vehicle_steer={:?}, aim_fire={:?}, aim_assist={:?}, camera_speed={:.2}, size={:.2}, opacity={:.0}%, haptics={}, phone_touchscreen={}",
         settings.overlay,
         settings.overlay_detail,
         settings.touch,
@@ -358,7 +359,9 @@ fn append_settings(report: &mut String, settings: Option<&crate::settings::Setti
         settings.touch_size,
         settings.touch_opacity * 100.0,
         settings.haptics,
+        settings.phone_touchscreen,
     );
+    let _ = writeln!(report, "Phone: touchscreen={}, bigger={}", settings.phone_touchscreen, settings.phone_enlarge);
 }
 
 fn append_touch_diagnostics(report: &mut String, events: &[String]) {
@@ -367,6 +370,19 @@ fn append_touch_diagnostics(report: &mut String, events: &[String]) {
     let _ = writeln!(report, "\nRecent virtual touch/gamepad output (no finger coordinates):");
     if events.is_empty() {
         report.push_str("(no touch gamepad transitions recorded)\n");
+        return;
+    }
+    for event in events {
+        let _ = writeln!(report, "{event}");
+    }
+}
+
+fn append_input_diagnostics(report: &mut String, events: &[String]) {
+    use std::fmt::Write as _;
+
+    let _ = writeln!(report, "\nRecent phone/input-device transitions (from the game):");
+    if events.is_empty() {
+        report.push_str("(no phone or input-device transitions recorded)\n");
         return;
     }
     for event in events {

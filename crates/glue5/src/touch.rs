@@ -196,6 +196,13 @@ const ICON_FILES: &[(&str, &[u8])] = icons![
 /// The icons' textures, by name.
 type Icons = HashMap<&'static str, egui::TextureHandle>;
 
+/// The support trace's clock: milliseconds since its first line, so a
+/// repeating pattern (the phone cycling, say) shows its rhythm.
+fn diagnostic_clock() -> Instant {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    *START.get_or_init(Instant::now)
+}
+
 fn load_icons(ctx: &egui::Context) -> Icons {
     ICON_FILES.iter().filter_map(|(name, _)| load_icon(ctx, name).map(|t| (*name, t))).collect()
 }
@@ -936,10 +943,22 @@ impl Touch {
         self.diagnostic_events.iter().cloned().collect()
     }
 
-    fn record_gamepad(&mut self, pad: &Gamepad) {
+    /// A line for the support report's touch trace (bounded, no finger
+    /// coordinates).
+    fn record_diagnostic(&mut self, line: String) {
         const LIMIT: usize = 48;
-        let axis = |value: f32| (value.clamp(-1.0, 1.0) * 100.0).round() as i16;
-        let trigger = |value: f32| (value.clamp(0.0, 1.0) * 100.0).round() as u8;
+        if self.diagnostic_events.len() == LIMIT {
+            self.diagnostic_events.pop_front();
+        }
+        self.diagnostic_events.push_back(format!("+{}ms {line}", diagnostic_clock().elapsed().as_millis()));
+    }
+
+    fn record_gamepad(&mut self, pad: &Gamepad) {
+        // Quarter steps, not hundredths: a stick's drift would otherwise
+        // fill the bounded trace and push the button presses — the part
+        // that matters — out of it.
+        let axis = |value: f32| (value.clamp(-1.0, 1.0) * 4.0).round() as i16;
+        let trigger = |value: f32| (value.clamp(0.0, 1.0) * 4.0).round() as u8;
         let signature = (
             pad.buttons,
             [axis(pad.left[0]), axis(pad.left[1])],
@@ -973,17 +992,14 @@ impl Touch {
         .filter_map(|(bit, name)| (pad.buttons & bit != 0).then_some(name))
         .collect::<Vec<_>>();
         let buttons = if names.is_empty() { "none".to_owned() } else { names.join(",") };
-        if self.diagnostic_events.len() == LIMIT {
-            self.diagnostic_events.pop_front();
-        }
-        self.diagnostic_events.push_back(format!(
+        self.record_diagnostic(format!(
             "pad buttons=[{buttons}] left=({:.2},{:.2}) right=({:.2},{:.2}) triggers=({:.2},{:.2})",
-            f32::from(signature.1[0]) / 100.0,
-            f32::from(signature.1[1]) / 100.0,
-            f32::from(signature.2[0]) / 100.0,
-            f32::from(signature.2[1]) / 100.0,
-            f32::from(signature.3) / 100.0,
-            f32::from(signature.4) / 100.0,
+            f32::from(signature.1[0]) / 4.0,
+            f32::from(signature.1[1]) / 4.0,
+            f32::from(signature.2[0]) / 4.0,
+            f32::from(signature.2[1]) / 4.0,
+            f32::from(signature.3) / 4.0,
+            f32::from(signature.4) / 4.0,
         ));
     }
 
@@ -1026,19 +1042,50 @@ impl Touch {
     pub fn set_context(&mut self, context: PlayerContext) {
         let (menu, over, engine) = (self.menu_mode(), self.cursor_over_play(), self.engine_screen());
         let phone_opened = !self.context.phone && context.phone;
+        let phone_closed = self.context.phone && !context.phone;
         self.context = context;
+        if phone_opened || phone_closed {
+            self.record_diagnostic(format!("phone out: {}", context.phone));
+        }
         if context.phone {
             // Seen out: the phone button's pulse did its work.
             self.phone_requested = None;
         }
         if phone_opened {
-            // The opening button is UP. Once the phone appears, keeping that
-            // same finger down must not keep pressing UP in the phone UI.
+            // The phone's screen replaces the layout's right side. Let go of
+            // every button finger the phone does not keep (and of the fan and
+            // the prompts' own buttons): one still down from play — Melee is
+            // East, the phone's Cancel — would otherwise go on pressing
+            // under the phone and put it straight back away. Queued presses
+            // and inputs from before it opened go with them, and no click is
+            // left standing over the phone's first screen.
+            let mut released = 0;
+            self.fingers.retain(|_, finger| match finger {
+                Finger::Button { key: Key::Action(action), bits, .. } => {
+                    let keep = unsafe { (**action).with_phone } || *bits & (button::START | button::SELECT) != 0;
+                    if !keep {
+                        released |= *bits;
+                    }
+                    keep
+                }
+                Finger::Button { key: Key::Phone(_), .. } => true,
+                Finger::Button { bits, .. } => {
+                    released |= *bits;
+                    false
+                }
+                Finger::Radial { .. } => false,
+                _ => true,
+            });
+            self.pressed &= !released;
+            self.pressed_inputs.clear();
+            self.click = None;
+        }
+        if phone_closed {
+            // The phone's keys are gone with it: one still held (Back, say)
+            // must not go on pressing in play under its old name.
             let mut released = 0;
             self.fingers.retain(|_, finger| {
-                if let Finger::Button { key: Key::Action(action), bits, .. } = finger
-                    && unsafe { (**action).icon == PHONE.icon }
-                {
+                if let Finger::Button { key: Key::Phone(_), bits, .. } = finger {
                     released |= *bits;
                     false
                 } else {
@@ -1046,6 +1093,7 @@ impl Touch {
                 }
             });
             self.pressed &= !released;
+            self.pressed_inputs.clear();
         }
         if !self.aims_here() {
             self.aim_sticky = false;

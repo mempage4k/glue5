@@ -1112,6 +1112,32 @@ fn opening_phone_releases_the_held_open_button() {
 }
 
 #[test]
+fn opening_phone_releases_other_held_buttons_and_closing_releases_its_keys() {
+    let mut t = phone();
+    t.set_context(context(Activity::OnFoot));
+    // Melee is East — the phone's Cancel. Held over from play while the
+    // phone opens, it would put the phone straight back away.
+    let (x, y) = at(&t, spot(&t, "Melee\nReload"));
+    t.finger_down(1, x, y);
+    assert_eq!(t.gamepad().buttons & button::EAST, button::EAST);
+    t.set_context(PlayerContext { phone: true, ..context(Activity::OnFoot) });
+    assert_eq!(t.gamepad().buttons & button::EAST, 0, "a held Cancel must not survive the phone opening");
+    assert_eq!(t.gamepad().buttons, 0);
+    t.finger_up(1);
+
+    // And the phone's own Back, still held as the phone goes away, must
+    // not go on pressing in play.
+    t.set_game(Vec::new(), Some(phone_at(t.screen.x / t.screen.y)));
+    let back = t.buttons().iter().find(|b| matches!(b.key, Key::Phone(5))).map(|b| b.at).expect("the phone's Back key");
+    let (x, y) = at(&t, back);
+    t.finger_down(2, x, y);
+    assert_eq!(t.gamepad().buttons & button::EAST, button::EAST);
+    t.set_context(context(Activity::OnFoot));
+    assert_eq!(t.gamepad().buttons & button::EAST, 0, "the phone's Back must not survive it closing");
+    t.finger_up(2);
+}
+
+#[test]
 fn the_phone_button_pulses_once_until_the_phone_is_seen_out() {
     let mut t = phone();
     t.set_context(context(Activity::OnFoot));
