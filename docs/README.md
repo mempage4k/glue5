@@ -25,6 +25,7 @@
 - [Identification and collaboration protocol](protocolo-identificacao.md): the official rules for AI contributions, mirrored from the `[MENU]` branch so agents can read them without Linear access.
 - [CI coverage](ci-coverage.md): what each GitHub Actions workflow actually tests — and what it does not.
 - [Asset provenance](asset-provenance.md): bundled media under provenance review; decisions pending with the owner.
+- [Integration status](integration-status.md): which branch holds what, shared-file ownership, known conflicts and the Android build gate.
 - [Contributing](../CONTRIBUTING.md): tracker, branches, tests and commit rules.
 - [AI_GUIDE.md](../AI_GUIDE.md): guardrails for agents, including the Android build gate.
 
@@ -49,6 +50,18 @@ of truth for `main` until they land there.
 | `gta5-referencia/` (7 CSVs) | `arena/4f5cc306-glue5` `[MENU]` | Branch-only measurement data |
 | `gta-patches.md` | `arena/107599ac-glue5` (PR #12) `[TOUCH]` | Branch-only; linked from that branch's `docs/README.md` |
 | `validation-s21.md` | `[PERF]`, `arena/b8d177aa-glue5` per Linear comments | **Not published**: that branch is absent from the remote |
+| `documentacao-branch-menu.md` | `arena/4f5cc306-glue5` `[MENU]` | Local commit `84befb0`, **not pushed**; the detailed index of the branch-only docs |
+| `streaming-flow.md` | `arena/57946d80-glue5` `[SERV]` | Branch absent from the remote; changes not committed |
+| `windows-stream-audio-audit.md` | `arena/57946d80-glue5` `[SERV]` | Windows snapshot supplied by another chat, **not verified** by that agent |
+| `validation-s21.md` | `[PERF]`, local commit `710d364` | **Not published**: `arena/b8d177aa-glue5` is absent from the remote |
 
 `menu-sfx.md` and `project-diary.md` do exist in `main`, but the `[MENU]`
 branch carries different versions; see its index before merging either.
+
+**Coordination warning:** `docs/README.md` itself now has three authors
+(`main`, `[SERV]` and general review), plus the version carried by PR #12.
+`docs/project-diary.md` has `[MENU]`, `[PERF]` and `[SERV]` bullets. Both are
+append-on-append conflicts at integration time; see
+[Integration status](integration-status.md). The area code chosen by the
+server/streaming chat is `[SERV]`, not the `[STREAM]` proposed in the
+delegation messages.

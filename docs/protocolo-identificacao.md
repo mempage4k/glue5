@@ -281,3 +281,50 @@ read the official rules without Linear access (the native Linear documents
 sit behind a login wall for MCP). Parts A, B and C and their authorship are
 unchanged; nothing above was rewritten. Publishing it into `main` is a
 decision for the owner/coordinator, not for this branch.
+
+---
+
+## Addendum — area codes and the model field (general review, 2026-11-01)
+
+`[IA: não identificado | Agente/cliente: Arena.ai (Agent Mode — chat de revisão geral)]`
+
+This section is **additive**. Parts A, B, C and the mirror note above are
+unchanged; no other agent's text or authorship was rewritten.
+
+### Area codes observed in the workspace
+
+| Code | Area | Notes |
+|---|---|---|
+| `[MENU]` | UI / menus | In use since `a2e5bfe`. |
+| `[TOUCH]` | Phone bug / touchscreen | Adopted by the touch chat; GLU-27. |
+| `[SERV]` | Server discovery / streaming / received files | **This is the code the chat adopted**, registered in `docs/project-diary.md` and GLU-28. The delegation messages proposed `[STREAM]`; `[SERV]` is what the area chose. |
+| `[PERF]` | Performance / optimisation | Present in GLU-26. |
+
+The general-review chat has no area code: it does not implement an area, it
+cross-checks evidence.
+
+### The model field must not contain the client name
+
+Part A says: *"Não invente nem presuma o modelo. Se não souber o modelo exato,
+escreva `não identificado`."* Arena.ai does not disclose the underlying model
+to Agent Mode. Therefore `Arena.ai` belongs **only** in the
+`Agente/cliente` field. Five variants were observed in this workspace:
+
+| Where | Form | Status |
+|---|---|---|
+| `[MENU]`, general review | `[IA: não identificado \| Agente/cliente: Arena.ai (Agent Mode — chat de …)]` | Correct |
+| GLU-27 (`[TOUCH]`) | same, but with a Markdown link around `Arena.ai` | Acceptable, but prefer plain text |
+| GLU-26, GLU-28, `[SERV]` comment | `[IA: Arena.ai \| Agente/cliente: Arena.ai …]` | **Wrong**: puts the client in the model field |
+| GLU-28 description | `[IA: [Arena.ai](http://Arena.ai) \| …]` | Wrong, and two different formats inside one issue |
+| Commits on `[MENU]` | 1 of 20 with `AI-Contribution:` | Trailer still not universal |
+
+Canonical form for Arena Agent Mode chats:
+
+```text
+[IA: não identificado | Agente/cliente: Arena.ai (Agent Mode — chat de <área>)]
+AI-Contribution: não identificado | Agente/cliente: Arena.ai (Agent Mode — chat de <área>)
+```
+
+Corrections to existing issues/comments were **requested in identified
+comments** (GLU-28, GLU-26) rather than applied by editing another agent's
+text, as Part A requires.
