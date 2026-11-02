@@ -52,22 +52,28 @@ GitHub had no free machine: run it again later.
 
 ## Install the app
 
-- **iPhone / iPad** (`Glue5-ios.ipa`): install it with
+Every build's files carry the branch and the first seven characters of
+its commit, e.g. `Glue5-android-arena-107599ac-glue5-8767ebd.apk`. The
+`Glue5-BUILD-<branch>-<commit>.txt` file in the draft records branch,
+commit, subject, platform, time and the Actions run. See
+[Build identity](build-identity.md).
+
+- **iPhone / iPad** (`Glue5-ios-….ipa`): install it with
   [Sideloadly](https://sideloadly.io) or [AltStore](https://altstore.io)
   and your Apple ID. With a free Apple ID you have to install it again
   every 7 days.
-- **Android** (`Glue5-android.apk`): open the file on the phone and
+- **Android** (`Glue5-android-….apk`): open the file on the phone and
   install it. ⚠️ Do not delete `Glue5-android.keystore` from the draft:
   without it, the next version cannot update the app.
-- **Windows** (`Glue5-windows.exe`): put it in a folder of its own and
+- **Windows** (`Glue5-windows-….exe`): put it in a folder of its own and
   run it. The first time, Windows warns about it: press **More info**,
   then **Run anyway**. If it says `VCRUNTIME140.dll` is missing, install
   Microsoft's
   [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe).
-- **Mac** (`Glue5-macos.dmg`): open it and drag the app into
+- **Mac** (`Glue5-macos-….dmg`): open it and drag the app into
   Applications. The first time, macOS blocks it: open **System Settings ›
   Privacy & Security** and press **Open Anyway**.
-- **Linux** (`Glue5-linux-….AppImage`): make it executable and run it.
+- **Linux** (`Glue5-linux-…-<branch>-<commit>.AppImage`): make it executable and run it.
 
 Then put the game's files on the device: see
 [Getting started](getting-started.md#3-install-it-and-add-the-files).
