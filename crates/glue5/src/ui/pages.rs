@@ -966,6 +966,7 @@ mod tests {
             friend_requests: 0,
             source: crate::settings::Source::Folder,
             stream: None,
+            packages: None,
             sharing: None,
             mods: false,
             mod_menus: false,

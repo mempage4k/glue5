@@ -5,11 +5,11 @@
 use std::time::{Duration, Instant};
 
 use egui::{Align, Layout, RichText, Sense, Stroke, pos2, vec2};
-use glue5_stream::Check;
+use glue5_stream::{Check, GamePackage, PackageManifest, TransferPhase};
 
-use super::pages::{bytes, card_title, is_server, server_name, sheet, small, stream_progress, stream_state};
-use super::widgets::{Control, action_button, focus, setting, text_field, toggle};
-use super::{Action, Status, TextKind, WARN, theme};
+use super::pages::{bytes, card_title, is_server, rail, server_name, sheet, small, stream_progress, stream_state};
+use super::widgets::{Control, action_button, action_buttons, focus, setting, text_field, toggle};
+use super::{Action, PackageTransfer, Packages, Status, TextKind, WARN, theme};
 use crate::paths;
 use crate::settings::{Settings, Source};
 
@@ -46,6 +46,7 @@ pub(super) fn servers_page(
     }
     sheet(ctx, "servers-window", "SERVERS", |ui| {
         in_use(ui, settings, status);
+        optional_content(ui, settings, status, actions);
         network(ui, settings, status, actions);
         by_address(ui, page, actions);
         this_device(ui, settings, status);
@@ -204,6 +205,158 @@ fn this_device(ui: &mut egui::Ui, settings: &mut Settings, status: &Status) {
     .on_hover_text("What came from the server; it is taken again when needed");
 }
 
+/// Optional content the server in use offers: only what its validated
+/// manifest lists, what of it is here, and the one transfer's way. This is
+/// separate from downloading the whole game; a server with no manifest is
+/// ordinary and the base stream carries on without this section's help.
+fn optional_content(ui: &mut egui::Ui, settings: &Settings, status: &Status, actions: &mut Vec<Action>) {
+    let server = settings.server.trim();
+    let Some(packages) = status.packages else { return };
+    if server.is_empty() || settings.source != Source::Server {
+        return;
+    }
+    // Only for the server the stream is really from.
+    if status.stream.filter(|(s, _)| *s == server).is_none() {
+        return;
+    }
+    section(ui, "OPTIONAL CONTENT", |_| {});
+    let Some(manifest) = &packages.manifest else {
+        muted(ui, "This server offers no optional content.");
+        return;
+    };
+    let offered = offered_packages(manifest);
+    if offered.is_empty() {
+        muted(ui, "This server offers no optional content.");
+        return;
+    }
+    if packages.transfer.as_ref().is_some_and(|transfer| transfer.active) {
+        ui.ctx().request_repaint_after(Duration::from_millis(100));
+    }
+    for package in offered {
+        package_row(ui, package, packages, actions);
+    }
+}
+
+/// What the manifest offers as a choice: its optional packages. What one of
+/// them needs still comes with it, without becoming a choice of its own.
+fn offered_packages(manifest: &PackageManifest) -> Vec<&GamePackage> {
+    manifest.packages.iter().filter(|package| package.optional).collect()
+}
+
+/// How one package stands, for its row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PackageState {
+    Installed,
+    Unavailable,
+    /// It can be asked for (another transfer may still block the asking).
+    Offered,
+    /// The transfer running is this package's.
+    Transferring,
+    /// This package's last transfer failed (kept with its error).
+    Failed,
+}
+
+fn package_state(package: &GamePackage, packages: &Packages) -> PackageState {
+    if packages.installed.iter().any(|id| id == &package.id) {
+        return PackageState::Installed;
+    }
+    if let Some(transfer) = &packages.transfer
+        && transfer.package_id == package.id
+    {
+        return if transfer.active { PackageState::Transferring } else { PackageState::Failed };
+    }
+    let unavailable = !package.available
+        || packages
+            .manifest
+            .as_ref()
+            .is_some_and(|manifest| manifest.install_order(&package.id).is_err());
+    if unavailable {
+        return PackageState::Unavailable;
+    }
+    PackageState::Offered
+}
+
+/// A package's second line: what the manifest says it is, and its size.
+fn package_subtitle(package: &GamePackage) -> String {
+    let mut parts = Vec::new();
+    if !package.description.trim().is_empty() {
+        parts.push(package.description.trim().to_owned());
+    }
+    parts.push(bytes(package.total_size));
+    if !package.dependencies.is_empty() {
+        parts.push("what it needs comes with it".to_owned());
+    }
+    parts.join(" · ")
+}
+
+fn package_row(ui: &mut egui::Ui, package: &GamePackage, packages: &Packages, actions: &mut Vec<Action>) {
+    let state = package_state(package, packages);
+    let subtitle = package_subtitle(package);
+    ui.push_id(&package.id, |ui| {
+        match state {
+            PackageState::Installed => {
+                setting(ui, &package.name, Control::Action, Some(&subtitle), |ui| {
+                    ui.add_enabled_ui(false, |ui| action_button(ui, "Installed"));
+                });
+            }
+            PackageState::Unavailable => {
+                setting(ui, &package.name, Control::Action, Some(&subtitle), |ui| {
+                    ui.add_enabled_ui(false, |ui| action_button(ui, "Unavailable"));
+                });
+            }
+            PackageState::Offered | PackageState::Failed => {
+                let busy = packages.transfer.as_ref().is_some_and(|transfer| transfer.active);
+                setting(ui, &package.name, Control::Action, Some(&subtitle), |ui| {
+                    if ui.add_enabled_ui(!busy, |ui| action_button(ui, "Download")).inner.clicked() {
+                        actions.push(Action::DownloadPackage(package.id.clone()));
+                    }
+                });
+                if state == PackageState::Failed
+                    && let Some(error) = packages.transfer.as_ref().and_then(|transfer| transfer.error.as_ref())
+                {
+                    small(ui, error, WARN);
+                }
+            }
+            PackageState::Transferring => {
+                let transfer = packages.transfer.as_ref().expect("the package state says a transfer is running");
+                let paused = transfer.progress.phase == TransferPhase::Paused;
+                setting(ui, &package.name, Control::Actions, Some(&subtitle), |ui| {
+                    let texts: [&str; 2] = if paused { ["Resume", "Cancel"] } else { ["Pause", "Cancel"] };
+                    let clicked = action_buttons(ui, &texts);
+                    if clicked[0].clicked() {
+                        actions.push(if paused {
+                            Action::ResumePackageDownload
+                        } else {
+                            Action::PausePackageDownload
+                        });
+                    }
+                    if clicked[1].clicked() {
+                        actions.push(Action::CancelPackageDownload);
+                    }
+                });
+                transfer_progress(ui, transfer);
+            }
+        }
+    });
+}
+
+/// The running transfer's line and rail, from its latest word. The bytes are
+/// the whole job's: the package asked for and what it needs.
+fn transfer_progress(ui: &mut egui::Ui, transfer: &PackageTransfer) {
+    let progress = &transfer.progress;
+    let done = progress.bytes_done as f32 / progress.bytes_total.max(1) as f32;
+    let of = format!("{} of {} ({:.0}%)", bytes(progress.bytes_done), bytes(progress.bytes_total), done * 100.0);
+    let line = match progress.phase {
+        TransferPhase::Downloading => format!("Downloading: {of}"),
+        TransferPhase::Paused => format!("Paused: {of}"),
+        TransferPhase::Verifying => format!("Checking what is already here: {of}"),
+        TransferPhase::Installed => "Installed.".to_owned(),
+        TransferPhase::Cancelled => "Cancelled.".to_owned(),
+    };
+    small(ui, &line, theme::MUTED);
+    rail(ui, done);
+}
+
 /// A section's title, and on its right what `right` adds (a button).
 fn section(ui: &mut egui::Ui, title: &str, right: impl FnOnce(&mut egui::Ui)) {
     let scale = theme::density(ui);
@@ -230,4 +383,124 @@ fn panel(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
 
 fn muted(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).size(12.0 * theme::density(ui)).color(theme::MUTED));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn package(id: &str) -> GamePackage {
+        GamePackage {
+            id: id.to_owned(),
+            name: format!("Package {id}"),
+            description: String::new(),
+            kind: "example".to_owned(),
+            version: "1".to_owned(),
+            target_build: "build".to_owned(),
+            catalog_hash: "hash".to_owned(),
+            protocol_min: 1,
+            protocol_max: 1,
+            dependencies: Vec::new(),
+            files: Vec::new(),
+            total_size: 2048,
+            optional: true,
+            available: true,
+            locale: None,
+            created_at: None,
+        }
+    }
+
+    fn transfer(id: &str, active: bool) -> PackageTransfer {
+        PackageTransfer {
+            package_id: id.to_owned(),
+            progress: glue5_stream::TransferProgress {
+                package_id: id.to_owned(),
+                phase: TransferPhase::Downloading,
+                file_path: None,
+                file_done: 0,
+                file_total: 0,
+                bytes_done: 0,
+                bytes_total: 0,
+            },
+            error: (!active).then(|| "stopped".to_owned()),
+            active,
+        }
+    }
+
+    #[test]
+    fn package_states_come_from_the_manifest_snapshot() {
+        let package = package("voice");
+        let mut packages = Packages { manifest: None, installed: Vec::new(), transfer: None };
+        assert_eq!(package_state(&package, &packages), PackageState::Offered);
+
+        packages.transfer = Some(transfer("voice", true));
+        assert_eq!(package_state(&package, &packages), PackageState::Transferring);
+
+        packages.transfer = Some(transfer("voice", false));
+        assert_eq!(package_state(&package, &packages), PackageState::Failed);
+
+        packages.transfer = Some(transfer("other", true));
+        packages.installed.push("voice".to_owned());
+        assert_eq!(package_state(&package, &packages), PackageState::Installed);
+
+        let mut unavailable = package("voice");
+        unavailable.available = false;
+        packages.installed.clear();
+        packages.transfer = None;
+        assert_eq!(package_state(&unavailable, &packages), PackageState::Unavailable);
+    }
+
+    #[test]
+    fn a_package_whose_dependency_is_unavailable_is_unavailable() {
+        let mut root = package("root");
+        root.dependencies = vec!["dep".to_owned()];
+        let mut dep = package("dep");
+        dep.available = false;
+        let packages = Packages {
+            manifest: Some(glue5_stream::PackageManifest {
+                schema_version: 1,
+                server_id: "server".to_owned(),
+                build: "build".to_owned(),
+                catalog_hash: "hash".to_owned(),
+                protocol_min: 1,
+                protocol_max: 1,
+                packages: vec![root.clone(), dep],
+            }),
+            installed: Vec::new(),
+            transfer: None,
+        };
+        assert_eq!(package_state(&root, &packages), PackageState::Unavailable);
+    }
+
+    #[test]
+    fn only_optional_packages_are_offered() {
+        let voice = package("voice");
+        let mut needed = package("needed");
+        needed.optional = false;
+        let manifest = glue5_stream::PackageManifest {
+            schema_version: 1,
+            server_id: "server".to_owned(),
+            build: "build".to_owned(),
+            catalog_hash: "hash".to_owned(),
+            protocol_min: 1,
+            protocol_max: 1,
+            packages: vec![voice, needed],
+        };
+        let offered = offered_packages(&manifest);
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0].id, "voice");
+    }
+
+    #[test]
+    fn package_subtitles_say_only_what_the_manifest_says() {
+        let mut package = package("voice");
+        assert_eq!(package_subtitle(&package), bytes(package.total_size));
+
+        package.description = "Optional words".to_owned();
+        package.dependencies = vec!["base".to_owned()];
+        assert_eq!(
+            package_subtitle(&package),
+            format!("Optional words · {} · what it needs comes with it", bytes(package.total_size))
+        );
+    }
 }

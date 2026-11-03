@@ -459,6 +459,9 @@ pub fn run() -> Result<()> {
         stream: None,
         source: Source::Folder,
         stream_for: None,
+        packages: None,
+        packages_from: None,
+        package_job: None,
         sharing: None,
         studio: None,
         studio_failed: None,
@@ -703,6 +706,12 @@ struct App {
     /// The server and whether the whole game is wanted, as the stream was
     /// started for (it starts again when they change).
     stream_for: Option<(String, bool)>,
+    /// The optional packages of the server in use: the snapshot the UI shows,
+    /// and the client it was taken from (a new client takes a new one).
+    packages: Option<ui::Packages>,
+    packages_from: Option<std::sync::Weak<glue5_stream::Client>>,
+    /// The package transfer running, if any.
+    package_job: Option<PackageJob>,
     /// This computer sharing its game folder (desktop).
     sharing: Option<crate::sharing::Sharing>,
     /// GLUE 5 Studio, served while the game runs with mods and the setting
@@ -1211,6 +1220,7 @@ impl App {
         // The UI: over the game at every turn, before it when something changed.
         let mut actions = Vec::new();
         let stream = self.stream.clone();
+        self.package_care(stream.as_ref());
         let stream = stream.as_ref().map(|c| (c.server(), c.status()));
         let stream_alert = self.stream_alert(stream.as_ref().map(|(_, s)| s));
         let servers = self.servers.lock().unwrap().clone();
@@ -1237,6 +1247,7 @@ impl App {
                 friend_requests: glue5_runtime::friends::pending(),
                 source: self.settings.source,
                 stream: stream.as_ref().map(|(server, status)| (*server, status)),
+                packages: self.packages.as_ref(),
                 sharing: self.sharing.as_ref().map(crate::sharing::Sharing::state),
                 mods: glue5_mods::installed(),
                 mod_menus: glue5_mods::has_menus(),
@@ -1373,6 +1384,22 @@ impl App {
                     }
                 }
                 Action::ClearCopy => self.clear_copy(),
+                Action::DownloadPackage(id) => self.start_package_download(id),
+                Action::PausePackageDownload => {
+                    if let Some(job) = &self.package_job {
+                        job.control.pause();
+                    }
+                }
+                Action::ResumePackageDownload => {
+                    if let Some(job) = &self.package_job {
+                        job.control.resume();
+                    }
+                }
+                Action::CancelPackageDownload => {
+                    if let Some(job) = &self.package_job {
+                        job.control.cancel();
+                    }
+                }
                 Action::FindServers => self.find_servers(),
                 Action::UseServer(address) => {
                     self.settings.server = address;
@@ -2179,6 +2206,7 @@ impl App {
     /// the settings want it: moved there if it was elsewhere (on the same
     /// volume: a rename).
     fn start_stream(&mut self, server: Option<String>) {
+        let package_thread = self.cancel_package_job();
         let root = self.copy_root();
         let old = self.stream.take().map(|old| {
             old.stop();
@@ -2191,6 +2219,10 @@ impl App {
         // the next one opens the copy.
         let to = root.clone();
         glue5_stream::after_stopped(move || {
+            // A cancelled package transfer stops writing before the copy moves.
+            if let Some(thread) = package_thread {
+                let _ = thread.join();
+            }
             let root = to;
             // At start, where an earlier run left it: the download setting
             // changed while the game ran, which the stream never follows.
@@ -2248,6 +2280,188 @@ impl App {
         self.ui.repaint();
     }
 
+    /// Ends the package transfer running, if any, without a word: what
+    /// arrived stays in the copy for a later try.
+    fn cancel_package_job(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        let thread = self.package_job.take().map(|job| {
+            job.control.cancel();
+            job.thread
+        });
+        if let Some(packages) = &mut self.packages {
+            packages.transfer = None;
+        }
+        thread
+    }
+
+    /// Refresh which packages count as installed (reads the receipts).
+    fn refresh_installed_packages(&mut self, client: &glue5_stream::Client) {
+        let Some(packages) = &mut self.packages else { return };
+        let ids: Vec<String> = packages
+            .manifest
+            .as_ref()
+            .map_or_else(Vec::new, |manifest| manifest.packages.iter().map(|package| package.id.clone()).collect());
+        packages.installed = ids.into_iter().filter(|id| client.package_is_installed(id)).collect();
+    }
+
+    /// Start downloading an optional package (and what it needs) on its own
+    /// thread; the frame follows it through `package_care`.
+    fn start_package_download(&mut self, id: String) {
+        if self.package_job.is_some() {
+            return;
+        }
+        let Some(client) = self.stream.clone() else { return };
+        let offered = self
+            .packages
+            .as_ref()
+            .and_then(|packages| packages.manifest.as_ref())
+            .is_some_and(|manifest| {
+                manifest.packages.iter().any(|package| package.id == id && package.optional)
+                    && manifest.install_order(&id).is_ok()
+            });
+        let installed = self.packages.as_ref().is_some_and(|packages| packages.installed.contains(&id));
+        if !offered || installed {
+            return;
+        }
+        let control = Arc::new(glue5_stream::TransferControl::default());
+        let seed = glue5_stream::TransferProgress {
+            package_id: id.clone(),
+            phase: glue5_stream::TransferPhase::Downloading,
+            file_path: None,
+            file_done: 0,
+            file_total: 0,
+            bytes_done: 0,
+            bytes_total: 0,
+        };
+        let state = Arc::new(Mutex::new(PackageJobState { progress: Some(seed.clone()), outcome: None }));
+        let worker_client = client.clone();
+        let worker_control = control.clone();
+        let worker_state = state.clone();
+        let worker_id = id.clone();
+        let thread = std::thread::spawn(move || {
+            let outcome = worker_client.download_package(&worker_id, &worker_control, |progress| {
+                worker_state.lock().unwrap().progress = Some(progress);
+            });
+            worker_state.lock().unwrap().outcome = Some(outcome.map_err(|e| format!("{e:#}")));
+        });
+        self.package_job = Some(PackageJob {
+            id: id.clone(),
+            client: Arc::downgrade(&client),
+            control,
+            state,
+            thread,
+        });
+        // Show the transfer from the first frame, before its first word.
+        if let Some(packages) = &mut self.packages {
+            packages.transfer = Some(ui::PackageTransfer {
+                package_id: id.clone(),
+                progress: seed,
+                error: None,
+                active: true,
+            });
+        }
+    }
+
+    /// Optional packages: take the snapshot when the stream is ready (once
+    /// per client), follow the transfer running, and say how it ended.
+    fn package_care(&mut self, client: Option<&Arc<glue5_stream::Client>>) {
+        // A transfer belongs to its client: another one (or none) ends it.
+        let stale = self.package_job.as_ref().is_some_and(|job| {
+            !job.client
+                .upgrade()
+                .zip(client)
+                .is_some_and(|(old, current)| Arc::ptr_eq(&old, current))
+        });
+        if stale {
+            drop(self.cancel_package_job());
+        }
+        let Some(client) = client else { return };
+
+        // The snapshot: once per client, when it is ready to answer. No
+        // manifest is an ordinary server: the base stream does not care.
+        let fresh = self
+            .packages_from
+            .as_ref()
+            .and_then(|old| old.upgrade())
+            .is_some_and(|old| Arc::ptr_eq(&old, client));
+        if !fresh {
+            self.packages = None;
+            self.packages_from = None;
+            if client.is_ready() {
+                let manifest = client.packages();
+                let installed = manifest.as_ref().map_or_else(Vec::new, |manifest| {
+                    manifest
+                        .packages
+                        .iter()
+                        .filter(|package| client.package_is_installed(&package.id))
+                        .map(|package| package.id.clone())
+                        .collect()
+                });
+                self.packages = Some(ui::Packages { manifest, installed, transfer: None });
+                self.packages_from = Some(Arc::downgrade(client));
+            }
+        }
+
+        let Some((progress, outcome)) = self.package_job.as_ref().map(|job| {
+            let state = job.state.lock().unwrap();
+            (state.progress.clone(), state.outcome.clone())
+        }) else {
+            return;
+        };
+        self.ui.repaint_in(Duration::from_millis(250));
+        match outcome {
+            None => {
+                if let Some(progress) = progress {
+                    let package_id = self.package_job.as_ref().expect("transfer polled above").id.clone();
+                    if let Some(packages) = &mut self.packages {
+                        packages.transfer = Some(ui::PackageTransfer {
+                            package_id,
+                            progress,
+                            error: None,
+                            active: true,
+                        });
+                    }
+                }
+            }
+            Some(Ok(())) => {
+                let job = self.package_job.take().expect("transfer polled above");
+                let name = self
+                    .packages
+                    .as_ref()
+                    .and_then(|packages| packages.manifest.as_ref())
+                    .and_then(|manifest| manifest.packages.iter().find(|package| package.id == job.id))
+                    .map_or_else(|| job.id.clone(), |package| package.name.clone());
+                if let Some(packages) = &mut self.packages {
+                    packages.transfer = None;
+                }
+                self.refresh_installed_packages(client);
+                self.ui.alert(format!("{name} is installed."));
+            }
+            Some(Err(why)) => {
+                let job = self.package_job.take().expect("transfer polled above");
+                let cancelled = job.control.is_cancelled()
+                    || progress
+                        .as_ref()
+                        .is_some_and(|progress| progress.phase == glue5_stream::TransferPhase::Cancelled);
+                self.refresh_installed_packages(client);
+                if let Some(packages) = &mut self.packages {
+                    packages.transfer = if cancelled {
+                        None
+                    } else {
+                        progress.map(|progress| ui::PackageTransfer {
+                            package_id: job.id.clone(),
+                            progress,
+                            error: Some(why.clone()),
+                            active: false,
+                        })
+                    };
+                }
+                if !cancelled {
+                    self.ui.note(format!("The package download stopped: {why}"));
+                }
+            }
+        }
+    }
+
     /// The sign over the game while it waits for the server.
     fn stream_alert(&mut self, stream: Option<&glue5_stream::Status>) -> Option<ui::StreamAlert> {
         let stream = stream.filter(|_| self.game.is_some() && self.source == Source::Server)?;
@@ -2283,12 +2497,20 @@ impl App {
         }
         // Started again (empty) at the next turn.
         self.stream_for = None;
+        // The copy goes: its packages (and a transfer into it) go with it.
+        let package_thread = self.cancel_package_job();
+        self.packages = None;
+        self.packages_from = None;
         if self.settings.game_dir.as_deref() == Some(root.as_path()) {
             self.settings.game_dir = None;
         }
         // In the background (gigabytes), once the client has finished, and
         // before the next one starts on the folder.
         glue5_stream::after_stopped(move || {
+            // A cancelled package transfer stops writing before the copy goes.
+            if let Some(thread) = package_thread {
+                let _ = thread.join();
+            }
             if let Err(e) = glue5_stream::cache::clear(&root) {
                 log::warn!("stream: the copy could not be deleted: {e}");
             }
@@ -2408,6 +2630,24 @@ fn mods_dir(user_dir: &Path) -> PathBuf {
     let dir = paths::mods_dir(user_dir);
     glue5_mods::bundled::install(&dir);
     dir
+}
+
+/// A package transfer's shared word with the app: the worker writes, the
+/// frame reads.
+struct PackageJobState {
+    progress: Option<glue5_stream::TransferProgress>,
+    outcome: Option<Result<(), String>>,
+}
+
+/// One optional package being downloaded on its own thread.
+struct PackageJob {
+    /// The package asked for (what it needs comes with it).
+    id: String,
+    /// The stream it downloads from (weak: the app's client may go first).
+    client: std::sync::Weak<glue5_stream::Client>,
+    control: Arc<glue5_stream::TransferControl>,
+    state: Arc<Mutex<PackageJobState>>,
+    thread: std::thread::JoinHandle<()>,
 }
 
 /// The whole game downloaded from a server into `dir`: a copy (it has the

@@ -134,6 +134,14 @@ pub enum Action {
     CloseFriends,
     /// Delete the stream's copy of the game.
     ClearCopy,
+    /// Download the optional package with this id (and what it needs).
+    DownloadPackage(String),
+    /// Pause the package transfer running.
+    PausePackageDownload,
+    /// Resume the paused package transfer.
+    ResumePackageDownload,
+    /// Cancel the package transfer running (what arrived stays for later).
+    CancelPackageDownload,
     /// Look for servers on the network.
     FindServers,
     /// Stream from this server (an address found or typed).
@@ -237,6 +245,32 @@ impl Thermal {
     }
 }
 
+/// Optional content the server in use offers: a snapshot of its validated
+/// manifest, what of it is installed, and the one transfer running. Taken
+/// by the app when the stream is ready; the pages only read it.
+pub struct Packages {
+    /// The server's manifest; none: it offers no optional content (an older
+    /// server, or none published — ordinary, not an error).
+    pub manifest: Option<glue5_stream::PackageManifest>,
+    /// The ids installed when last checked (a receipt and complete files).
+    pub installed: Vec<String>,
+    /// The transfer running, or the one that just failed.
+    pub transfer: Option<PackageTransfer>,
+}
+
+/// One optional package on its way (or stopped on the way).
+pub struct PackageTransfer {
+    /// The package the user asked for (what it needs comes with it).
+    pub package_id: String,
+    /// The latest word from the worker: its phase and aggregate bytes. Its
+    /// own package id may name a dependency being installed first.
+    pub progress: glue5_stream::TransferProgress,
+    /// It failed: why. A cancellation the user asked for is not kept.
+    pub error: Option<String>,
+    /// The worker still runs.
+    pub active: bool,
+}
+
 /// What the pages show about the application.
 pub struct Status<'a> {
     /// The game's folder, if found.
@@ -283,6 +317,9 @@ pub struct Status<'a> {
     pub source: crate::settings::Source,
     /// The stream from a server, if one is set: its address and state.
     pub stream: Option<(&'a str, &'a glue5_stream::Status)>,
+    /// Optional content the server in use offers; none until its client is
+    /// ready and the snapshot was taken.
+    pub packages: Option<&'a Packages>,
     /// This computer sharing its game folder (desktop).
     pub sharing: Option<crate::sharing::State>,
     /// The game runs with mods.
