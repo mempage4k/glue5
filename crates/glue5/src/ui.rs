@@ -1034,6 +1034,7 @@ impl Ui {
         // starts, then it does.
         let starting = std::mem::take(&mut self.starting);
         // A warning on show keeps the keys it answers to itself.
+        let popup_was_open = self.popup.is_some();
         let popup_keys = if self.popup.is_some() {
             popup::take_keys(&mut self.events)
         } else {
@@ -1159,6 +1160,7 @@ impl Ui {
             sfx::want(Sound::Open);
         }
         let answered = self.popup.as_mut().map(|open| popup::show(&ctx, open, screen, content, popup_keys));
+        let popup_shown = popup_was_open || answered.is_some();
         match answered {
             None | Some(popup::Outcome::Open) => {}
             Some(popup::Outcome::Confirmed(confirm)) => {
@@ -1205,10 +1207,14 @@ impl Ui {
         // A tab of the shell's strip asks for a page the same way a page's own
         // link does.
         let tab = shell::take_nav();
-        if back {
-            self.back();
-        } else if let Some(page) = go.or(tab) {
-            self.show(page);
+        // While a warning owned the frame, the page under it does not leave
+        // or follow a tab from a press meant for the warning.
+        if !popup_shown {
+            if back {
+                self.back();
+            } else if let Some(page) = go.or(tab) {
+                self.show(page);
+            }
         }
         if self.starting.is_some() {
             self.repaint();

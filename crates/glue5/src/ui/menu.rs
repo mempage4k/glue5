@@ -4,7 +4,7 @@
 //! pause menu's list, in place of cards and a bottom rail.
 use egui::Response;
 
-use super::theme::density;
+use super::theme::{density, fonts, palette};
 use super::widgets::{action_value, choice, info_text, row, value_text};
 use super::{Action, Mode, Page, Status, WARN, shell};
 use crate::settings::{Settings, Source};
@@ -48,6 +48,12 @@ pub(super) fn show_with_spinner(
     settings.sandbox = *selected == Mode::Sandbox;
     let prepared = status.game_dir.is_some() && status.preparing.is_none();
     let going = starting.or(status.preparing.map(|_| status.mode));
+    let loading_label = going.map(|mode| {
+        let which = MODES.iter().find(|m| m.0 == mode).map_or("", |m| m.1);
+        status
+            .preparing
+            .map_or_else(|| format!("STARTING {}", which.to_uppercase()), |p| format!("PREPARING {:.0}%", p * 100.0))
+    });
 
     shell::frame(ctx, "PLAY", |ui| {
         let scale = density(ui);
@@ -91,14 +97,6 @@ pub(super) fn show_with_spinner(
         };
         let loading = going.is_some();
         let play = row(ui, &label, "Starts the game with the line selected above", |ui| {
-            if loading {
-                if let Some(spinner) = spinner {
-                    let scale = density(ui);
-                    let (rect, _) = ui.allocate_exact_size(egui::vec2(17.0 * scale, 17.0 * scale), egui::Sense::hover());
-                    let time = ui.ctx().input(|i| i.time) as f32;
-                    super::spinner::paint(ui.painter(), spinner, rect, time * 5.2);
-                }
-            }
             if prepared && !loading { action_value(ui, "A") } else { value_text(ui, if loading { "" } else { "—" }) }
         });
         if play.clicked() {
@@ -163,4 +161,75 @@ pub(super) fn show_with_spinner(
             );
         }
     });
+    if let Some(label) = loading_label.as_deref() {
+        loading_prompt(ctx, spinner, label);
+    }
+}
+
+/// Where the loading prompt sits: thin against the safe area's bottom right,
+/// on the scene beside the shell's panel (the menu's controls are in the
+/// panel, on the left).
+fn loading_prompt_rect(safe: egui::Rect, size: egui::Vec2, scale: f32) -> egui::Rect {
+    let margin = 16.0 * scale;
+    let min = egui::pos2(
+        (safe.right() - size.x - margin).max(safe.left()),
+        (safe.bottom() - size.y - margin).max(safe.top()),
+    );
+    egui::Rect::from_min_size(min, size)
+}
+
+/// The game's loading prompt while Play prepares or starts: one thin black
+/// strap at the bottom right, its words at the left and the turning spinner
+/// at its right. It answers to nothing.
+fn loading_prompt(ctx: &egui::Context, spinner: Option<&egui::TextureHandle>, text: &str) {
+    let safe = ctx.content_rect();
+    if safe.width() <= 0.0 || safe.height() <= 0.0 {
+        return;
+    }
+    let scale = super::theme::layout_scale(safe);
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("loading-prompt")));
+    let pad_x = 12.0 * scale;
+    let spinner_size = spinner.map_or(0.0, |_| 17.0 * scale);
+    let spinner_gap = if spinner.is_some() { 10.0 * scale } else { 0.0 };
+    let max_width = (320.0 * scale).min((safe.width() - 32.0 * scale).max(1.0));
+    let text_width = (max_width - pad_x * 2.0 - spinner_size - spinner_gap).max(1.0);
+    let galley = painter.layout(
+        text.to_owned(),
+        egui::FontId::new(12.0 * scale, fonts::strong()),
+        palette::TEXT_HI,
+        text_width,
+    );
+    let size = egui::vec2(
+        (galley.size().x + pad_x * 2.0 + spinner_size + spinner_gap).min(max_width),
+        (galley.size().y + 16.0 * scale).max(32.0 * scale),
+    );
+    let rect = loading_prompt_rect(safe, size, scale);
+    painter.rect_filled(rect, 0, palette::BLOCK);
+    painter.rect_stroke(rect, 0, egui::Stroke::new(1.0, palette::LINE), egui::StrokeKind::Inside);
+    let text_h = galley.size().y;
+    painter.galley(egui::pos2(rect.left() + pad_x, rect.center().y - text_h * 0.5), galley, palette::TEXT_HI);
+    if let Some(spinner) = spinner {
+        let spinner_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.right() - pad_x - spinner_size * 0.5, rect.center().y),
+            egui::Vec2::splat(spinner_size),
+        );
+        let time = ctx.input(|i| i.time) as f32;
+        super::spinner::paint(&painter, spinner, spinner_rect, time * 5.2);
+        ctx.request_repaint_after(std::time::Duration::from_millis(33));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loading_prompt_hugs_the_bottom_right_of_the_safe_area() {
+        let safe = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(410.0, 220.0));
+        let rect = loading_prompt_rect(safe, egui::vec2(180.0, 32.0), 1.0);
+        assert_eq!(rect.left(), 214.0);
+        assert_eq!(rect.top(), 172.0);
+        assert_eq!(rect.right(), 394.0);
+        assert_eq!(rect.bottom(), 204.0);
+    }
 }

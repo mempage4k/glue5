@@ -64,6 +64,12 @@ pub(super) fn panel_rect(viewport: Rect, safe: Rect) -> Rect {
     Rect::from_min_max(viewport.min, pos2(right, viewport.bottom()))
 }
 
+/// The scene showing right of the shell panel. A press there is the player's
+/// way back, as pressing the game behind a floating menu is.
+fn outside_panel(area: Rect, panel: Rect) -> Option<Rect> {
+    (panel.right() < area.right()).then(|| Rect::from_min_max(pos2(panel.right(), area.top()), area.max))
+}
+
 /// Only the pages whose rows need a separate help column reserve one. The
 /// social, server, mod and credits pages already carry their explanations
 /// inline and need the full width for controls.
@@ -103,6 +109,16 @@ pub(super) fn frame(ctx: &Context, title: &str, add: impl FnOnce(&mut Ui)) -> bo
             backdrop.set_clip_rect(viewport);
             backdrop.rect_filled(full_panel, 0, palette::BLOCK);
             let panel = Rect::from_min_size(area.min, vec2(panel_w, area.height()));
+            // A press on the scene beside the panel goes back. PLAY is the
+            // root: it has nowhere to go back to. A warning over the page
+            // still owns its presses (the frame drops this page's answers
+            // while one is on show).
+            if page != Some(Page::Start)
+                && let Some(outside) = outside_panel(area, panel)
+                && ui.interact(outside, Id::new(("shell-outside", title)), Sense::click()).clicked()
+            {
+                back = true;
+            }
 
             let header_h = metrics::HEADER * scale;
             let tabs_h = metrics::TABS * scale;
@@ -310,6 +326,14 @@ mod tests {
         for title in ["FRIENDS", "SERVERS", "MODS", "CREDITS"] {
             assert!(!has_help_column(title), "{title} already explains its rows inline");
         }
+    }
+
+    #[test]
+    fn outside_panel_is_the_scene_right_of_the_panel() {
+        let area = Rect::from_min_max(pos2(10.0, 20.0), pos2(410.0, 220.0));
+        let panel = Rect::from_min_max(pos2(10.0, 20.0), pos2(260.0, 220.0));
+        assert_eq!(outside_panel(area, panel), Some(Rect::from_min_max(pos2(260.0, 20.0), pos2(410.0, 220.0))));
+        assert_eq!(outside_panel(area, area), None);
     }
 
     #[test]
