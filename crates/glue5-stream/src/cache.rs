@@ -17,7 +17,7 @@
 //! fast as a local game folder. When space runs out, files unused for the
 //! longest time are emptied (a per-file lock keeps readers away meanwhile).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -39,9 +39,12 @@ const VERSION: u32 = 1;
 pub const MARKER: &str = ".glue5-stream";
 /// In every copy (partial or complete): the server's list of files.
 pub const CATALOG: &str = "catalog.json";
+const PACKAGE_PINS: &str = "package-pins.json";
 
 pub struct Cache {
     root: PathBuf,
+    build: String,
+    catalog_hash: String,
     total: u64,
     /// Files kept open, and how many may be: the rest are opened for each
     /// use (the open-file limit is 10240 on Apple systems, often 1024 on
@@ -120,7 +123,29 @@ struct Slot {
     pack: bool,
     /// Holds a part of the boot set: every start reads it.
     boot: AtomicBool,
+    /// A verified optional package member, protected from normal cache eviction.
+    pinned: AtomicBool,
     dirty: AtomicBool,
+}
+
+fn load_pins(root: &Path, catalog: &Catalog) -> HashSet<String> {
+    let Ok(bytes) = fs::read(root.join(PACKAGE_PINS)) else { return HashSet::new() };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return HashSet::new() };
+    if value["version"].as_u64() != Some(1)
+        || value["build"].as_str() != Some(catalog.build.as_str())
+        || value["catalog_hash"].as_str() != Some(catalog.hash.as_str())
+    {
+        return HashSet::new();
+    }
+    value["files"].as_array().into_iter().flatten().filter_map(|v| {
+        let path = v.as_str()?;
+        if !crate::catalog::safe_path(path) || !path.starts_with("data/") {
+            return None;
+        }
+        let id = catalog.find(path)? as usize;
+        let entry = catalog.entries.get(id)?;
+        (entry.path == path).then(|| path.to_owned())
+    }).collect()
 }
 
 impl Slot {
@@ -146,6 +171,7 @@ impl Cache {
         // eviction could never take it back.
         let (partial, lost) = (root.join(MARKER).exists(), index.is_none());
         let old = index.unwrap_or_default();
+        let pinned = load_pins(root, catalog);
         let session = old.session.wrapping_add(1);
         let (mut kept, mut used) = (0usize, 0u64);
         // Blocks the index on disk claims that this copy does not (see below).
@@ -182,6 +208,7 @@ impl Cache {
                 touched: AtomicU32::new(0),
                 pack: crate::pack::kind_of(catalog, slots.len()).is_some(),
                 boot: AtomicBool::new(false),
+                pinned: AtomicBool::new(pinned.contains(e.path.as_str())),
                 dirty: AtomicBool::new(false),
             };
             used += slot.bytes();
@@ -202,6 +229,8 @@ impl Cache {
         let total = slots.iter().map(|s| s.size).sum();
         let cache = Cache {
             root: root.to_owned(),
+            build: catalog.build.clone(),
+            catalog_hash: catalog.hash.clone(),
             total,
             kept: AtomicUsize::new(0),
             keep_at_most: sys::open_file_budget(),
@@ -396,6 +425,38 @@ impl Cache {
         }
         self.changed.store(true, Ordering::Release);
         added
+    }
+
+    /// Invalidates all cached blocks of file `id`, for a package file whose
+    /// content SHA-256 did not match its manifest.
+    pub fn invalidate(&self, id: u32) -> io::Result<()> {
+        let s = self.slots.get(id as usize).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unknown file id"))?;
+        let _g = s.guard.write().unwrap();
+        let _w = s.writing.lock().unwrap();
+        let freed = s.bytes();
+        for word in &s.present {
+            word.store(0, Ordering::Release);
+        }
+        self.used.fetch_sub(freed.min(self.used()), Ordering::Relaxed);
+        {
+            let mut dirty = self.dirty.lock().unwrap();
+            if !s.dirty.swap(true, Ordering::AcqRel) {
+                dirty.push(id);
+            }
+        }
+        self.changed.store(true, Ordering::Release);
+        // Persist the empty bitmap before truncating: a crash cannot make
+        // zero-filled bytes count as previously verified game data.
+        self.save()?;
+        if let Some(file) = s.file.get() {
+            file.set_len(0)?;
+            file.set_len(s.size)?;
+        } else if self.path(id).is_file() {
+            let file = OpenOptions::new().write(true).open(self.path(id))?;
+            file.set_len(0)?;
+            file.set_len(s.size)?;
+        }
+        Ok(())
     }
 
     /// Stores the whole file `id` (from a pack), without keeping it open.
@@ -619,6 +680,39 @@ impl Cache {
         self.slots[id as usize].boot.store(true, Ordering::Relaxed);
     }
 
+    /// Persist the set of verified package files which normal cache pressure
+    /// must not evict. Pins are bound to this exact build and catalog hash.
+    pub fn set_pinned(&self, ids: &[u32]) -> io::Result<()> {
+        let mut selected = vec![false; self.slots.len()];
+        for &id in ids {
+            let Some(value) = selected.get_mut(id as usize) else {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "package pin has an unknown catalog id"));
+            };
+            *value = true;
+        }
+        let files: Vec<_> = self.slots.iter().zip(&selected).filter_map(|(slot, pin)| pin.then_some(slot.path.as_str())).collect();
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "version": 1, "build": self.build, "catalog_hash": self.catalog_hash, "files": files,
+        })).map_err(io::Error::other)?;
+        let tmp = self.root.join(format!("{PACKAGE_PINS}.tmp"));
+        let path = self.root.join(PACKAGE_PINS);
+        fs::write(&tmp, &bytes)?;
+        File::open(&tmp)?.sync_all()?;
+        fs::rename(&tmp, &path)?;
+        for (slot, pin) in self.slots.iter().zip(selected) {
+            slot.pinned.store(pin, Ordering::Release);
+        }
+        Ok(())
+    }
+
+    pub fn is_pinned(&self, id: u32) -> bool {
+        self.slots.get(id as usize).is_some_and(|slot| slot.pinned.load(Ordering::Acquire))
+    }
+
+    pub fn pinned_ids(&self) -> Vec<u32> {
+        self.slots.iter().enumerate().filter_map(|(id, slot)| slot.pinned.load(Ordering::Acquire).then_some(id as u32)).collect()
+    }
+
     /// Empties the files used longest ago until `want` bytes are freed:
     /// those of earlier runs first, then this run's, least recently used
     /// first; the boot set's files after them (every start reads them, and
@@ -626,7 +720,12 @@ impl Cache {
     /// packs' files last (every start needs them, and a start without the
     /// server cannot have them again). Returns the bytes freed.
     pub fn evict(&self, want: u64) -> u64 {
-        let mut order: Vec<u32> = (0..self.slots.len() as u32).filter(|&i| self.slots[i as usize].bytes() > 0).collect();
+        let mut order: Vec<u32> = (0..self.slots.len() as u32)
+            .filter(|&i| {
+                let slot = &self.slots[i as usize];
+                slot.bytes() > 0 && !slot.pinned.load(Ordering::Acquire)
+            })
+            .collect();
         order.sort_by_key(|&i| {
             let s = &self.slots[i as usize];
             let tier = if s.pack { 2 } else { s.boot.load(Ordering::Relaxed) as u8 };
@@ -851,6 +950,32 @@ mod tests {
         assert_eq!(c.read(0, 0, &mut buf).unwrap(), Some(4));
         assert_eq!(buf, [7; 4]);
         assert!(c.evict(1) > 0 && !c.has(0, 0, 0));
+        let _ = clear(&root);
+    }
+
+    #[test]
+    fn verified_package_files_are_pinned_across_cache_reopens() {
+        let root = std::env::temp_dir().join(format!("glue5-cache-pins-{}", std::process::id()));
+        let _ = clear(&root);
+        let entries = vec![
+            Entry { path: "data/audio/voice.rpf".into(), size: 2 * BLOCK, mtime: 1 },
+            Entry { path: "data/audio/other.rpf".into(), size: 2 * BLOCK, mtime: 1 },
+        ];
+        let catalog = Catalog::new("x".into(), entries, 2);
+        {
+            let cache = Cache::open(&root, &catalog).unwrap();
+            cache.write_whole(0, &vec![1; (2 * BLOCK) as usize]).unwrap();
+            cache.write_whole(1, &vec![2; (2 * BLOCK) as usize]).unwrap();
+            cache.set_pinned(&[0]).unwrap();
+            assert!(cache.is_pinned(0));
+            assert_eq!(cache.evict(4 * BLOCK), 2 * BLOCK);
+            assert!(cache.complete(0));
+            assert!(!cache.complete(1));
+        }
+        let cache = Cache::open(&root, &catalog).unwrap();
+        assert!(cache.is_pinned(0));
+        assert!(!cache.is_pinned(1));
+        assert_eq!(cache.evict(4 * BLOCK), 0);
         let _ = clear(&root);
     }
 

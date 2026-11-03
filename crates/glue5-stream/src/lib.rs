@@ -13,11 +13,13 @@ pub mod catalog;
 pub mod client;
 pub mod discovery;
 pub mod pack;
+pub mod packages;
 pub mod protocol;
 pub mod server;
 mod sys;
 
 pub use client::{Check, Client, Options, Phase, Status, after_stopped, check};
+pub use packages::{GamePackage, PackageFile, PackageManifest, TransferControl, TransferPhase, TransferProgress};
 pub use protocol::PORT;
 pub use sys::lan_addresses;
 

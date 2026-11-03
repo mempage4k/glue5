@@ -25,6 +25,7 @@
 - [GTA V runtime patches](gta-patches.md): durable rules, evidence, patch boundaries, and open questions for future GTA patch work.
 - [Windows streaming server and audio mirror audit](windows-stream-audio-audit.md): a supplied Windows audit snapshot, repository streaming behavior, and open questions for optional character-voice downloads.
 - [Streaming flow map](streaming-flow.md): source map from server announcement and discovery to client cache and engine reads; includes the current Android-only support note.
+- [Optional game-content package manifest](package-manifest.md): versioned optional HELLO blob contract for logical content packages; distinct from transport packs.
 - [Project diary](project-diary.md): temporary chronological notes; not the source of truth for durable design decisions or backlogs.
 
 **Conventions and governance**

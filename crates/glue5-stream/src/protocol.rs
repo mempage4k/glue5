@@ -18,7 +18,8 @@
 //! The server sends [`HELLO`] (JSON: protocol, build, catalog hash, blob
 //! sizes) as soon as a client connects. The client then asks for byte ranges
 //! of catalog files ([`READ`]) and for whole named blobs ([`BLOB`]: the
-//! catalog, the packs, the boot sets), each with a priority. The server
+//! catalog, the packs, the boot sets, and the optional `packages` manifest),
+//! each with a priority. Older clients ignore unknown optional HELLO blobs. The server
 //! answers with [`DATA`] chunks and an [`END`] per request, always sending
 //! the most urgent request's next chunk first: a read the engine is blocked
 //! on overtakes megabytes of prefetch after at most one chunk. [`PRIORITY`]
