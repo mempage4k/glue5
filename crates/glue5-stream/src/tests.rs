@@ -11,8 +11,10 @@ use std::time::{Duration, Instant};
 use crate::cache::BLOCK;
 use crate::catalog::Catalog;
 use crate::client::{Client, Options, Phase};
-use crate::protocol::{DATA, HEADER, HELLO, Header};
+use crate::protocol::{CHUNK, DATA, HEADER, HELLO, Header};
 use crate::server::{self, Server};
+use crate::packages::{TransferControl, TransferPhase};
+use sha2::{Digest, Sha256};
 
 const BUILD: &str = "testbuild";
 
@@ -211,6 +213,105 @@ fn wait_ready(c: &Client) {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[test]
+fn optional_package_manifest_is_negotiated_without_reordering_catalog_ids() {
+    let dir = temp("packages-game");
+    game(&dir);
+    let file_path = "data/x64/audio/voice.rpf";
+    let file_bytes = vec![0x3a; (CHUNK as usize) * 2 + 3];
+    fs::write(dir.join(file_path), &file_bytes).unwrap();
+    let catalog = Catalog::scan(&dir, BUILD).unwrap();
+    let file_id = catalog.find(file_path).unwrap();
+    let manifest = serde_json::json!({
+        "schema_version": 1,
+        "server_id": "test-server",
+        "build": BUILD,
+        "catalog_hash": catalog.hash,
+        "protocol_min": 1,
+        "protocol_max": 1,
+        "packages": [{
+            "id": "voice-en", "name": "Voice", "description": "synthetic fixture",
+            "kind": "dialogue", "version": "1", "target_build": BUILD,
+            "catalog_hash": catalog.hash, "protocol_min": 1, "protocol_max": 1,
+            "dependencies": [],
+            "files": [{"path": file_path, "size": file_bytes.len(),
+                "sha256": crate::catalog::hex(&Sha256::digest(&file_bytes)),
+                "catalog_id": file_id, "dependencies": []}],
+            "total_size": file_bytes.len(), "optional": true, "available": true,
+            "locale": "en", "created_at": null
+        }]
+    });
+    fs::write(dir.join(crate::packages::MANIFEST_FILE), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let server = serve(&dir, &dir.join("packs"), "127.0.0.1:0".parse().unwrap());
+    let address = server.addr().to_string();
+    let root = temp("packages-copy");
+    let client = Client::start(Options {
+        server: address.clone(), root: root.clone(), build: BUILD.into(), low_memory: false,
+    });
+    wait_ready(&client);
+    let received = client.packages().expect("new server advertises package metadata");
+    assert_eq!(received.server_id, "test-server");
+    assert_eq!(received.packages[0].files[0].catalog_id, file_id);
+    assert_eq!(client.find(file_path), Some(file_id));
+    let cancel = TransferControl::default();
+    let stopped_once = AtomicBool::new(false);
+    let interrupted = client.download_package("voice-en", &cancel, |p| {
+        if p.phase == TransferPhase::Downloading && p.file_done > 0 && !stopped_once.swap(true, Ordering::AcqRel) {
+            cancel.cancel();
+        }
+    });
+    assert!(interrupted.is_err());
+    assert!(!client.package_is_installed("voice-en"));
+    assert!(!root.join("packages-state.json").exists());
+    let mut damaged = fs::OpenOptions::new().write(true).open(root.join(file_path)).unwrap();
+    damaged.write_all(b"corrupt fixture bytes").unwrap();
+    damaged.sync_all().unwrap();
+
+    let retry = TransferControl::default();
+    let phases = Mutex::new(Vec::new());
+    client.download_package("voice-en", &retry, |p| phases.lock().unwrap().push(p.phase)).unwrap();
+    assert!(phases.lock().unwrap().contains(&TransferPhase::Verifying));
+    assert!(phases.lock().unwrap().contains(&TransferPhase::Installed));
+    assert!(client.package_is_installed("voice-en"));
+    let bytes = fs::read(root.join(file_path)).unwrap();
+    assert_eq!(bytes, file_bytes);
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(root.join("packages-state.json")).unwrap()).unwrap();
+    assert!(state["installed"]["voice-en"].is_object());
+    assert!(String::from_utf8_lossy(&fs::read(root.join("package-pins.json")).unwrap()).contains(file_path));
+    client.stop();
+    client.join();
+    drop(server);
+    let offline = Client::start(Options {
+        server: address, root: root.clone(), build: BUILD.into(), low_memory: false,
+    });
+    wait_ready(&offline);
+    assert!(offline.packages().is_some());
+    assert!(offline.package_is_installed("voice-en"));
+    offline.stop();
+    offline.join();
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn invalid_optional_package_manifest_does_not_prevent_base_streaming() {
+    let dir = temp("bad-packages-game");
+    game(&dir);
+    fs::write(dir.join(crate::packages::MANIFEST_FILE), b"not-json").unwrap();
+    let server = serve(&dir, &dir.join("packs"), "127.0.0.1:0".parse().unwrap());
+    let root = temp("bad-packages-copy");
+    let client = Client::start(Options {
+        server: server.addr().to_string(), root: root.clone(), build: BUILD.into(), low_memory: false,
+    });
+    wait_ready(&client);
+    assert!(client.packages().is_none());
+    client.stop();
+    client.join();
+    drop(server);
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]

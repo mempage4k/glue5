@@ -20,7 +20,7 @@
 //! touches its folder: a client started after it waits, and so does work
 //! on copies' folders ([`after_stopped`]).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{self, BufReader, Read};
 use std::net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs};
@@ -32,10 +32,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use glue5_qos::{self as qos, Qos};
+use sha2::{Digest, Sha256};
 
 use crate::cache::{BLOCK, Cache};
 use crate::catalog::Catalog;
 use crate::pack::{self, Kind};
+use crate::packages::{self, PackageManifest, TransferControl, TransferPhase, TransferProgress};
 use crate::protocol::*;
 
 pub struct Options {
@@ -179,6 +181,10 @@ pub struct Client {
 struct Ready {
     catalog: Catalog,
     cache: Cache,
+    /// Optional logical packages; absent/invalid metadata never disables base streaming.
+    packages: Option<PackageManifest>,
+    package_server_id: Option<String>,
+    package_hash: Option<String>,
     manifest: Vec<u8>,
     boot: Vec<(u32, u64, u64)>,
     /// Per file: its runs in `boot`.
@@ -320,6 +326,199 @@ impl Client {
         &self.opts.root
     }
 
+    /// Validated optional content announced by this server. `None` means the
+    /// server is older, did not publish a manifest, or its manifest was invalid.
+    pub fn packages(&self) -> Option<PackageManifest> {
+        self.ready.get()?.packages.clone()
+    }
+
+    /// Whether a package has a matching durable receipt and all of its files
+    /// are still complete in the cache. The receipt records the SHA-256 check
+    /// performed at installation time.
+    pub fn package_is_installed(&self, package_id: &str) -> bool {
+        let Some(ready) = self.ready.get() else { return false };
+        let Some(manifest) = ready.packages.as_ref() else { return false };
+        let Some(package) = manifest.packages.iter().find(|p| p.id == package_id) else { return false };
+        let path = self.opts.root.join("packages-state.json");
+        let (state, identity) = load_package_state(&path, manifest);
+        let fingerprint = package_fingerprint(package);
+        identity
+            && state["installed"][package_id]["fingerprint"].as_str() == Some(fingerprint.as_str())
+            && package.files.iter().all(|file| ready.cache.complete(file.catalog_id) && ready.cache.size(file.catalog_id) == file.size)
+    }
+
+    /// Downloads one selected package and its dependencies using ordinary
+    /// catalog range reads. Partial blocks remain in the cache for resumption;
+    /// only verified package members are pinned against cache eviction.
+    pub fn download_package(
+        &self,
+        package_id: &str,
+        control: &TransferControl,
+        mut progress: impl FnMut(TransferProgress),
+    ) -> Result<()> {
+        let ready = self.ready.get().context("stream is not ready")?;
+        let manifest = ready.packages.as_ref().context("server has no valid optional package manifest")?;
+        let order = manifest.install_order(package_id)?;
+        let mut packages_to_install = Vec::with_capacity(order.len());
+        let mut files = BTreeMap::new();
+        for package in order {
+            packages_to_install.push(package.clone());
+            for file in &package.files {
+                if let Some(old) = files.get(&file.path)
+                    && (old.size != file.size || old.sha256 != file.sha256 || old.catalog_id != file.catalog_id)
+                {
+                    bail!("packages disagree about the content of {}", file.path);
+                }
+                files.insert(file.path.clone(), file.clone());
+            }
+        }
+        let total: u64 = files.values().try_fold(0u64, |sum, file| sum.checked_add(file.size).context("package size overflow"))?;
+        let mut verified = HashSet::new();
+        let mut verified_bytes = 0u64;
+        let mut missing = 0u64;
+        for file in files.values() {
+            if ready.cache.complete(file.catalog_id) {
+                let matches = hash_file_matches(&ready.cache.path(file.catalog_id), file.size, &file.sha256, Some(control), |hashed| {
+                    progress(TransferProgress {
+                        package_id: package_id.to_owned(), phase: TransferPhase::Verifying,
+                        file_path: Some(file.path.clone()), file_done: hashed, file_total: file.size,
+                        bytes_done: verified_bytes.saturating_add(hashed), bytes_total: total,
+                    });
+                })?;
+                let Some(matches) = matches else {
+                    let _ = ready.cache.save();
+                    progress(TransferProgress { package_id: package_id.to_owned(), phase: TransferPhase::Cancelled, file_path: Some(file.path.clone()), file_done: 0, file_total: file.size, bytes_done: verified_bytes, bytes_total: total });
+                    bail!("package download cancelled");
+                };
+                if matches {
+                    verified.insert(file.path.clone());
+                    verified_bytes = verified_bytes.saturating_add(file.size);
+                    continue;
+                }
+                ready.cache.invalidate(file.catalog_id)?;
+            }
+            let blocks = ready.cache.blocks(file.catalog_id);
+            let have = if blocks == 0 { 0 } else { ready.cache.count(file.catalog_id, 0, blocks - 1) * BLOCK };
+            missing = missing.saturating_add(file.size.saturating_sub(have.min(file.size)));
+        }
+        let required = if missing == 0 { 0 } else { missing.saturating_add(FLOOR).saturating_add(ROOM) };
+        if required > 0 {
+            let free = ready.cache.free_space().context("cannot determine free storage for package download")?;
+            if free < required {
+                bail!("not enough free storage: need about {required} bytes, have {free}");
+            }
+            if !self.connected.load(Ordering::Acquire) {
+                bail!("server is offline; partial package download can resume when connected");
+            }
+        }
+        let mut done = verified_bytes;
+        let state_path = self.opts.root.join("packages-state.json");
+        let (mut state, same_identity) = load_package_state(&state_path, manifest);
+        if !same_identity {
+            ready.cache.set_pinned(&[])?;
+        }
+        for package in packages_to_install {
+            for file in &package.files {
+                if verified.contains(&file.path) {
+                    continue;
+                }
+                let id = file.catalog_id;
+                let mut passed_hash = false;
+                for attempt in 0..2 {
+                    let mut offset = 0u64;
+                    while offset < file.size {
+                        if control.is_paused() {
+                            progress(TransferProgress {
+                                package_id: package.id.clone(), phase: TransferPhase::Paused,
+                                file_path: Some(file.path.clone()), file_done: offset, file_total: file.size,
+                                bytes_done: done + offset, bytes_total: total,
+                            });
+                        }
+                        if !control.wait_until_resumed() {
+                            let _ = ready.cache.save();
+                            progress(TransferProgress { package_id: package.id.clone(), phase: TransferPhase::Cancelled, file_path: Some(file.path.clone()), file_done: offset, file_total: file.size, bytes_done: done + offset, bytes_total: total });
+                            bail!("package download cancelled");
+                        }
+                        let amount = (file.size - offset).min(CHUNK as u64) as usize;
+                        let mut buffer = vec![0; amount];
+                        let Some(got) = self.read_inner(id, offset, &mut buffer, Some(control)) else {
+                            let _ = ready.cache.save();
+                            if control.is_cancelled() {
+                                progress(TransferProgress { package_id: package.id.clone(), phase: TransferPhase::Cancelled, file_path: Some(file.path.clone()), file_done: offset, file_total: file.size, bytes_done: done + offset, bytes_total: total });
+                                bail!("package download cancelled");
+                            }
+                            bail!("stream read failed for {}", file.path);
+                        };
+                        if got == 0 {
+                            bail!("unexpected end of {}", file.path);
+                        }
+                        offset += got as u64;
+                        progress(TransferProgress {
+                            package_id: package.id.clone(), phase: TransferPhase::Downloading,
+                            file_path: Some(file.path.clone()), file_done: offset, file_total: file.size,
+                            bytes_done: done + offset, bytes_total: total,
+                        });
+                    }
+                    if control.is_cancelled() {
+                        let _ = ready.cache.save();
+                        progress(TransferProgress { package_id: package.id.clone(), phase: TransferPhase::Cancelled, file_path: Some(file.path.clone()), file_done: offset, file_total: file.size, bytes_done: done + offset, bytes_total: total });
+                        bail!("package download cancelled");
+                    }
+                    ready.cache.save()?;
+                    progress(TransferProgress {
+                        package_id: package.id.clone(), phase: TransferPhase::Verifying,
+                        file_path: Some(file.path.clone()), file_done: 0, file_total: file.size,
+                        bytes_done: done, bytes_total: total,
+                    });
+                    if ready.cache.complete(id) {
+                        let matches = hash_file_matches(&ready.cache.path(id), file.size, &file.sha256, Some(control), |hashed| {
+                            progress(TransferProgress {
+                                package_id: package.id.clone(), phase: TransferPhase::Verifying,
+                                file_path: Some(file.path.clone()), file_done: hashed, file_total: file.size,
+                                bytes_done: done.saturating_add(hashed), bytes_total: total,
+                            });
+                        })?;
+                        let Some(matches) = matches else {
+                            let _ = ready.cache.save();
+                            progress(TransferProgress { package_id: package.id.clone(), phase: TransferPhase::Cancelled, file_path: Some(file.path.clone()), file_done: 0, file_total: file.size, bytes_done: done, bytes_total: total });
+                            bail!("package download cancelled");
+                        };
+                        if matches {
+                            passed_hash = true;
+                            break;
+                        }
+                    }
+                    ready.cache.invalidate(id)?;
+                    if attempt == 1 {
+                        bail!("SHA-256 mismatch after retry for {}", file.path);
+                    }
+                }
+                if !passed_hash {
+                    bail!("could not verify {}", file.path);
+                }
+                verified.insert(file.path.clone());
+                done = done.saturating_add(file.size);
+            }
+            state["installed"][package.id.as_str()] = serde_json::json!({
+                "version": package.version,
+                "fingerprint": package_fingerprint(&package),
+                "target_build": package.target_build,
+                "catalog_hash": package.catalog_hash,
+                "files": package.files.iter().map(|f| serde_json::json!({
+                    "path": f.path, "catalog_id": f.catalog_id, "size": f.size, "sha256": f.sha256,
+                })).collect::<Vec<_>>(),
+            });
+            save_package_state(&state_path, &state)?;
+            let pins = installed_pin_ids(manifest, &state);
+            ready.cache.set_pinned(&pins)?;
+            progress(TransferProgress {
+                package_id: package.id, phase: TransferPhase::Installed, file_path: None,
+                file_done: 0, file_total: 0, bytes_done: done, bytes_total: total,
+            });
+        }
+        Ok(())
+    }
+
     pub fn is_ready(&self) -> bool {
         self.ready.get().is_some()
     }
@@ -436,6 +635,16 @@ impl Client {
     /// Reads `buf.len()` bytes of file `id` at `off` (fewer at its end),
     /// waiting for the server if they are not here. `None`: no such file.
     pub fn read(&self, id: u32, off: u64, buf: &mut [u8]) -> Option<usize> {
+        self.read_inner(id, off, buf, None)
+    }
+
+    fn read_inner(
+        &self,
+        id: u32,
+        off: u64,
+        buf: &mut [u8],
+        control: Option<&crate::packages::TransferControl>,
+    ) -> Option<usize> {
         let r = self.ready.get()?;
         if id as usize >= r.cache.len() {
             return None;
@@ -465,6 +674,9 @@ impl Client {
         let mut asked: Option<Instant> = None;
         let mut logged = started;
         let got = loop {
+            if control.is_some_and(|c| !c.wait_until_resumed()) {
+                break None;
+            }
             match r.cache.read(id, off, &mut buf[..n]) {
                 Ok(Some(got)) => break Some(got),
                 Ok(None) => {}
@@ -788,6 +1000,13 @@ impl Client {
                 self.set_phase(Phase::Failed("the game's files changed on the server: restart the app".into()));
                 bail!("the catalog changed");
             }
+            Some(r)
+                if hello["server_id"].as_str() != r.package_server_id.as_deref()
+                    || hello["packages_hash"].as_str() != r.package_hash.as_deref() =>
+            {
+                self.set_phase(Phase::Failed("optional package metadata changed on the server: restart the app".into()));
+                bail!("the optional package manifest changed");
+            }
             Some(_) => {}
         }
         stream.set_read_timeout(Some(Duration::from_secs(2)))?;
@@ -826,9 +1045,21 @@ impl Client {
         let size = |name: &str| hello["blobs"][name].as_u64();
         // Asked together: one round trip, not one each.
         let boot_name = if self.opts.low_memory && size("bootset_low").is_some() { "bootset_low" } else { "bootset" };
-        let mut first = vec![("catalog", size("catalog").context("no catalog")?)];
-        first.extend(size(boot_name).map(|n| (boot_name, n)));
-        let first = s.ask(&first)?;
+        let mut requested = vec![("catalog", size("catalog").context("no catalog")?)];
+        let boot_req_index = size(boot_name).map(|n| {
+            requested.push((boot_name, n));
+            requested.len() - 1
+        });
+        let package_req_index = size(packages::MANIFEST_BLOB).and_then(|n| {
+            if n > packages::MAX_MANIFEST_BYTES as u64 {
+                log::warn!("stream: ignoring oversized optional package manifest ({n} bytes)");
+                None
+            } else {
+                requested.push((packages::MANIFEST_BLOB, n));
+                Some(requested.len() - 1)
+            }
+        });
+        let first = s.ask(&requested)?;
         let compressed = s.take(first[0], &|_, _| {})?;
         let json = unpack_json(&compressed, "the catalog")?;
         let catalog = Catalog::from_json(&json)?;
@@ -868,16 +1099,55 @@ impl Client {
             cache.save()?;
             fs::write(self.opts.root.join("packs.json"), serde_json::to_vec(&packs)?)?;
         }
-        let boot = match first.get(1) {
-            Some(&req) => {
+        let boot = match boot_req_index.map(|index| first[index]) {
+            Some(req) => {
                 let boot = unpack_json(&s.take(req, &|_, _| {})?, "the boot set")?;
                 fs::write(self.opts.root.join(BOOT_SET), &boot)?;
                 boot_runs(&catalog, &boot)
             }
             None => Vec::new(),
         };
+        let package_server_id = hello["server_id"].as_str().map(str::to_owned);
+        let package_hash = hello["packages_hash"].as_str().map(str::to_owned);
+        let package_manifest = if let Some(index) = package_req_index {
+            let bytes = s.take(first[index], &|_, _| {})?;
+            let actual_hash = crate::catalog::hex(&Sha256::digest(&bytes));
+            let expected_server = package_server_id.as_deref();
+            let hash_matches = package_hash.as_deref() == Some(actual_hash.as_str());
+            match (expected_server, hash_matches) {
+                (Some(server_id), true) => match PackageManifest::parse(&bytes, &catalog, Some(server_id)) {
+                    Ok(manifest) => {
+                        fs::write(self.opts.root.join(packages::MANIFEST_FILE), &bytes)?;
+                        Some(manifest)
+                    }
+                    Err(e) => {
+                        log::warn!("stream: ignoring invalid optional package manifest: {e:#}");
+                        let _ = fs::remove_file(self.opts.root.join(packages::MANIFEST_FILE));
+                        None
+                    }
+                },
+                (Some(_), false) => {
+                    log::warn!("stream: ignoring optional package manifest with mismatched SHA-256");
+                    let _ = fs::remove_file(self.opts.root.join(packages::MANIFEST_FILE));
+                    None
+                }
+                (None, _) => {
+                    log::warn!("stream: ignoring package manifest without HELLO server_id");
+                    let _ = fs::remove_file(self.opts.root.join(packages::MANIFEST_FILE));
+                    None
+                }
+            }
+        } else {
+            let _ = fs::remove_file(self.opts.root.join(packages::MANIFEST_FILE));
+            None
+        };
+        if let Some(manifest) = &package_manifest {
+            reconcile_package_cache(&self.opts.root, &catalog, &cache, manifest)?;
+        } else {
+            cache.set_pinned(&[])?;
+        }
         fs::write(self.opts.root.join(crate::cache::CATALOG), &json)?;
-        self.make_ready(catalog, cache, boot);
+        self.make_ready(catalog, cache, boot, package_manifest, package_server_id, package_hash);
         Ok(())
     }
 
@@ -897,11 +1167,34 @@ impl Client {
         }
         log::info!("stream: playing from the copy until {} answers", self.opts.server);
         let boot = fs::read(self.opts.root.join(BOOT_SET)).map(|b| boot_runs(&catalog, &b)).unwrap_or_default();
-        self.make_ready(catalog, cache, boot);
+        let (packages, package_server_id, package_hash) = match fs::read(self.opts.root.join(packages::MANIFEST_FILE)) {
+            Ok(bytes) => {
+                let value = serde_json::from_slice::<serde_json::Value>(&bytes).ok();
+                let server_id = value.as_ref().and_then(|v| v["server_id"].as_str()).map(str::to_owned);
+                let manifest = server_id.as_deref().and_then(|id| PackageManifest::parse(&bytes, &catalog, Some(id)).ok());
+                let hash = manifest.as_ref().map(|_| crate::catalog::hex(&Sha256::digest(&bytes)));
+                (manifest, server_id.filter(|_| hash.is_some()), hash)
+            }
+            Err(_) => (None, None, None),
+        };
+        if let Some(manifest) = &packages {
+            reconcile_package_cache(&self.opts.root, &catalog, &cache, manifest)?;
+        } else {
+            cache.set_pinned(&[])?;
+        }
+        self.make_ready(catalog, cache, boot, packages, package_server_id, package_hash);
         Ok(())
     }
 
-    fn make_ready(&self, catalog: Catalog, cache: Cache, boot: Vec<(u32, u64, u64)>) {
+    fn make_ready(
+        &self,
+        catalog: Catalog,
+        cache: Cache,
+        boot: Vec<(u32, u64, u64)>,
+        packages: Option<PackageManifest>,
+        package_server_id: Option<String>,
+        package_hash: Option<String>,
+    ) {
         let n = catalog.entries.len();
         let radio = catalog.entries.iter().map(|e| e.path.to_ascii_lowercase().contains("/radio_")).collect();
         let manifest = catalog.engine_manifest();
@@ -913,6 +1206,9 @@ impl Client {
         let ready = Ready {
             catalog,
             cache,
+            packages,
+            package_server_id,
+            package_hash,
             manifest,
             boot,
             boot_runs,
@@ -1246,6 +1542,142 @@ impl Drop for Over {
     fn drop(&mut self) {
         self.0.set();
     }
+}
+
+fn file_hash_matches(path: &Path, size: u64, expected: &str) -> Result<bool> {
+    Ok(hash_file_matches(path, size, expected, None, |_| {})?.unwrap_or(false))
+}
+
+fn hash_file_matches(
+    path: &Path,
+    size: u64,
+    expected: &str,
+    control: Option<&TransferControl>,
+    mut progress: impl FnMut(u64),
+) -> Result<Option<bool>> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Some(false)),
+        Err(e) => return Err(e.into()),
+    };
+    if metadata.len() != size {
+        return Ok(Some(false));
+    }
+    let mut file = fs::File::open(path)?;
+    let mut hash = Sha256::new();
+    let mut buffer = vec![0u8; 1 << 20];
+    let mut hashed = 0u64;
+    loop {
+        if let Some(control) = control
+            && !control.wait_until_resumed()
+        {
+            return Ok(None);
+        }
+        let n = file.read(&mut buffer)?;
+        if n == 0 { break; }
+        hash.update(&buffer[..n]);
+        hashed += n as u64;
+        progress(hashed);
+    }
+    Ok(Some(crate::catalog::hex(&hash.finalize()) == expected))
+}
+
+fn package_fingerprint(package: &crate::packages::GamePackage) -> String {
+    let mut hash = Sha256::new();
+    hash.update(package.id.as_bytes());
+    hash.update([0]);
+    hash.update(package.version.as_bytes());
+    hash.update([0]);
+    hash.update(package.target_build.as_bytes());
+    for file in &package.files {
+        hash.update(file.path.as_bytes());
+        hash.update([0]);
+        hash.update(file.size.to_le_bytes());
+        hash.update(file.sha256.as_bytes());
+    }
+    crate::catalog::hex(&hash.finalize())
+}
+
+fn load_package_state(path: &Path, manifest: &PackageManifest) -> (serde_json::Value, bool) {
+    let fresh = || serde_json::json!({
+        "schema_version": 1,
+        "server_id": manifest.server_id,
+        "build": manifest.build,
+        "catalog_hash": manifest.catalog_hash,
+        "installed": {},
+    });
+    let Ok(bytes) = fs::read(path) else { return (fresh(), false) };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return (fresh(), false) };
+    let matches = value["schema_version"].as_u64() == Some(1)
+        && value["server_id"].as_str() == Some(manifest.server_id.as_str())
+        && value["build"].as_str() == Some(manifest.build.as_str())
+        && value["catalog_hash"].as_str() == Some(manifest.catalog_hash.as_str())
+        && value["installed"].is_object();
+    if matches { (value, true) } else { (fresh(), false) }
+}
+
+fn save_package_state(path: &Path, state: &serde_json::Value) -> Result<()> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, serde_json::to_vec(state)?)?;
+    fs::File::open(&tmp)?.sync_all()?;
+    fs::rename(tmp, path)?;
+    Ok(())
+}
+
+fn reconcile_package_cache(root: &Path, catalog: &Catalog, cache: &Cache, manifest: &PackageManifest) -> Result<()> {
+    let state_path = root.join("packages-state.json");
+    let old_state = fs::read(&state_path).ok().and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    let same_identity = old_state.as_ref().is_some_and(|state| {
+        state["schema_version"].as_u64() == Some(1)
+            && state["server_id"].as_str() == Some(manifest.server_id.as_str())
+            && state["build"].as_str() == Some(manifest.build.as_str())
+            && state["catalog_hash"].as_str() == Some(manifest.catalog_hash.as_str())
+            && state["installed"].is_object()
+    });
+    let mut new_hashes = HashMap::new();
+    for package in &manifest.packages {
+        for file in &package.files {
+            new_hashes.insert(file.path.as_str(), file.sha256.as_str());
+        }
+    }
+    if let Some(old_state) = &old_state
+        && let Some(installed) = old_state["installed"].as_object()
+    {
+        for receipt in installed.values() {
+            if let Some(files) = receipt["files"].as_array() {
+                for file in files {
+                    let Some(path) = file["path"].as_str() else { continue };
+                    let Some(old_hash) = file["sha256"].as_str() else { continue };
+                    if new_hashes.get(path).is_some_and(|&new_hash| new_hash != old_hash)
+                        && let Some(id) = catalog.find(path)
+                    {
+                        cache.invalidate(id)?;
+                    }
+                }
+            }
+        }
+    }
+    if same_identity {
+        let (state, _) = load_package_state(&state_path, manifest);
+        cache.set_pinned(&installed_pin_ids(manifest, &state))?;
+    } else {
+        cache.set_pinned(&[])?;
+    }
+    Ok(())
+}
+
+fn installed_pin_ids(manifest: &PackageManifest, state: &serde_json::Value) -> Vec<u32> {
+    let mut pins = HashSet::new();
+    for package in &manifest.packages {
+        let receipt = &state["installed"][package.id.as_str()];
+        let fingerprint = package_fingerprint(package);
+        if receipt["fingerprint"].as_str() == Some(fingerprint.as_str()) {
+            for file in &package.files {
+                pins.insert(file.catalog_id);
+            }
+        }
+    }
+    pins.into_iter().collect()
 }
 
 /// Blob requests of the sync, answered before anything else is asked.
