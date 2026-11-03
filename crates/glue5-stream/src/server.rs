@@ -17,9 +17,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 
 use crate::catalog::Catalog;
 use crate::pack::{self, Kind};
+use crate::packages::{self, PackageManifest};
 use crate::protocol::*;
 use crate::sys;
 
@@ -76,6 +78,24 @@ pub fn prepare(options: Options, progress: &dyn Fn(Step)) -> Result<Prepared> {
     progress(Step::Listing);
     sys::raise_open_file_limit();
     let catalog = Catalog::scan(&options.game, &options.build)?;
+    // An optional sidecar in the game root avoids adding manager metadata to
+    // the engine's `data/` manifest. Older clients ignore the extra blob.
+    let packages_path = options.game.join(packages::MANIFEST_FILE);
+    let package_manifest = match fs::read(&packages_path) {
+        Ok(bytes) if bytes.len() > packages::MAX_MANIFEST_BYTES => {
+            log::warn!("serve: ignoring oversized optional package manifest at {}", packages_path.display());
+            None
+        }
+        Ok(bytes) => match PackageManifest::parse(&bytes, &catalog, None) {
+            Ok(manifest) => Some((manifest, bytes)),
+            Err(e) => {
+                log::warn!("serve: ignoring invalid optional package manifest at {}: {e:#}", packages_path.display());
+                None
+            }
+        },
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e).with_context(|| format!("reading {}", packages_path.display())),
+    };
     let bytes: u64 = catalog.entries.iter().map(|e| e.size).sum();
     log::info!(
         "serve: {} ({} files, {:.1} GB; {} of the engine), catalog {}",
@@ -87,6 +107,10 @@ pub fn prepare(options: Options, progress: &dyn Fn(Step)) -> Result<Prepared> {
     );
     fs::create_dir_all(&options.cache).with_context(|| format!("creating {}", options.cache.display()))?;
     let mut blobs = vec![("catalog".to_string(), Blob::Memory(zstd::encode_all(&catalog.to_json()[..], 19)?))];
+    if let Some((manifest, bytes)) = &package_manifest {
+        blobs.push((packages::MANIFEST_BLOB.to_string(), Blob::Memory(bytes.clone())));
+        log::info!("serve: optional package manifest: {} packages ({})", manifest.packages.len(), packages_path.display());
+    }
     let mut packs = serde_json::Map::new();
     // One preparation builds the packs at a time: another (the app sharing
     // again before the first was ready) waits, and finds them built.
@@ -116,9 +140,14 @@ pub fn prepare(options: Options, progress: &dyn Fn(Step)) -> Result<Prepared> {
         }
     }
     let sizes: serde_json::Map<_, _> = blobs.iter().map(|(n, b)| (n.clone(), b.len().into())).collect();
-    let hello = serde_json::to_vec(&serde_json::json!({
+    let mut hello_json = serde_json::json!({
         "protocol": PROTOCOL, "build": options.build, "catalog": catalog.hash, "blobs": sizes, "packs": packs,
-    }))?;
+    });
+    if let Some((manifest, bytes)) = &package_manifest {
+        hello_json["server_id"] = manifest.server_id.clone().into();
+        hello_json["packages_hash"] = crate::catalog::hex(&Sha256::digest(bytes)).into();
+    }
+    let hello = serde_json::to_vec(&hello_json)?;
     let files = (0..catalog.entries.len()).map(|_| OnceLock::new()).collect();
     let rate = options.rate.map(|r| Mutex::new(Bucket { rate: r.max(1), tokens: 0.0, at: Instant::now() }));
     let shared = Shared { game: options.game, catalog, files, blobs, hello, rate, sent: AtomicU64::new(0) };
